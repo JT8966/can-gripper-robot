@@ -1,0 +1,10 @@
+{
+    "name": "can-gripper-robot",
+    "description": "Can-gripping robot for micro:bit and Cytron MOTION:BIT Pro",
+    "dependencies": {
+        "core": "*",
+        "pxt-motionbit": "github:CytronTechnologies/pxt-motionbit#v1.2.0"
+    },
+    "files": ["main.ts"],
+    "preferredEditor": "tsprj"
+}
