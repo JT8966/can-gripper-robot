@@ -1,10 +1,15 @@
 // MOTION:BIT Pro | ปรับมุมให้ตรงกับแขนจริงก่อนติดกระป๋อง
-const ARM_UP = 85
-const ARM_DOWN = 55
-const GRIP_OPEN = 65
-const GRIP_CLOSED = 95
-const BASE_FRONT = 90
-const BASE_DROP = 110
+const RACK_UP = 85
+const RACK_DOWN = 55
+// ค่าตั้งต้นสำหรับสองฝั่งที่ติดตั้งหันเข้าหากัน ปรับแต่ละฝั่งตามกลไกจริง
+const ELBOW_LEFT_FOLDED = 90
+const ELBOW_RIGHT_FOLDED = 90
+const ELBOW_LEFT_REACH = 110
+const ELBOW_RIGHT_REACH = 70
+const GRIP_LEFT_OPEN = 65
+const GRIP_RIGHT_OPEN = 115
+const GRIP_LEFT_CLOSED = 95
+const GRIP_RIGHT_CLOSED = 85
 const SPEED = 65 // 0–255
 const LEFT = MotionBitMotorDirection.Forward
 const RIGHT = MotionBitMotorDirection.Forward
@@ -99,9 +104,23 @@ function driveTo(color: number): boolean {
     return !stopped && hits >= 2
 }
 
-function moveServo(channel: MotionBitServoChannel, angle: number) {
+function moveRack(angle: number) {
     if (stopped) return
-    motionbit.setServoPosition(channel, angle)
+    motionbit.setServoPosition(MotionBitServoChannel.S4, angle)
+    basic.pause(550)
+}
+
+function moveElbow(reach: boolean) {
+    if (stopped) return
+    motionbit.setServoPosition(MotionBitServoChannel.S3, reach ? ELBOW_LEFT_REACH : ELBOW_LEFT_FOLDED)
+    motionbit.setServoPosition(MotionBitServoChannel.S5, reach ? ELBOW_RIGHT_REACH : ELBOW_RIGHT_FOLDED)
+    basic.pause(550)
+}
+
+function moveGrip(close: boolean) {
+    if (stopped) return
+    motionbit.setServoPosition(MotionBitServoChannel.S8, close ? GRIP_LEFT_CLOSED : GRIP_LEFT_OPEN)
+    motionbit.setServoPosition(MotionBitServoChannel.S6, close ? GRIP_RIGHT_CLOSED : GRIP_RIGHT_OPEN)
     basic.pause(550)
 }
 
@@ -110,20 +129,22 @@ function runRoute(): boolean {
         basic.showString("I2C")
         return false
     }
-    moveServo(MotionBitServoChannel.S4, ARM_UP)
-    moveServo(MotionBitServoChannel.S3, BASE_FRONT)
-    moveServo(MotionBitServoChannel.S8, GRIP_OPEN)
+    moveRack(RACK_UP)
+    moveElbow(false)
+    moveGrip(false)
     if (!driveTo(1)) return false
-    moveServo(MotionBitServoChannel.S4, ARM_DOWN)
-    moveServo(MotionBitServoChannel.S8, GRIP_CLOSED)
-    moveServo(MotionBitServoChannel.S4, ARM_UP)
+    moveElbow(true)
+    moveRack(RACK_DOWN)
+    moveGrip(true)
+    moveRack(RACK_UP)
+    moveElbow(false)
     pivot(TURN_AFTER_PICKUP_MS)
     if (!driveTo(2)) return false
-    moveServo(MotionBitServoChannel.S3, BASE_DROP)
-    moveServo(MotionBitServoChannel.S4, ARM_DOWN)
-    moveServo(MotionBitServoChannel.S8, GRIP_OPEN)
-    moveServo(MotionBitServoChannel.S4, ARM_UP)
-    moveServo(MotionBitServoChannel.S3, BASE_FRONT)
+    moveElbow(true)
+    moveRack(RACK_DOWN)
+    moveGrip(false)
+    moveRack(RACK_UP)
+    moveElbow(false)
     return !stopped
 }
 
