@@ -14,13 +14,13 @@ const SPEED = 65 // 0–255
 const LEFT = MotionBitMotorDirection.Forward
 const RIGHT = MotionBitMotorDirection.Forward
 const SEARCH_MS = 8000
-const FOLLOW_LINE = true
 const BLACK_LEVEL = 1
 const LINE_PINS = [DigitalPin.P12, DigitalPin.P13, DigitalPin.P14, DigitalPin.P15, DigitalPin.P16]
-// หลังยกกระป๋อง: 0 = ตรง, ค่าบวก = หมุนขวา, ค่าลบ = หมุนซ้าย (มิลลิวินาที)
-const TURN_AFTER_PICKUP_MS = 0
+// มุมจากแนวเริ่มต้น: บวกเลี้ยวขวา ลบเลี้ยวซ้าย
+const TURN_AFTER_PICKUP_DEG = 90
+const TURN_TOLERANCE_DEG = 4
 let address = 0x29
-let busy = false
+let busy = true
 let stopped = false
 
 function stopWheels() {
@@ -83,46 +83,55 @@ function opposite(dir: MotionBitMotorDirection): MotionBitMotorDirection {
     return MotionBitMotorDirection.Forward
 }
 
-function pivot(ms: number) {
-    if (stopped || ms == 0) return
-    if (ms > 0) driveSides(LEFT, opposite(RIGHT), SPEED, SPEED)
-    else driveSides(opposite(LEFT), RIGHT, SPEED, SPEED)
-    let end = input.runningTime() + Math.abs(ms)
-    while (!stopped && input.runningTime() < end) basic.pause(10)
-    stopWheels()
+function atBorder(): boolean {
+    for (let i = 0; i < LINE_PINS.length; i++) {
+        if (pins.digitalReadPin(LINE_PINS[i]) == BLACK_LEVEL) return true
+    }
+    return false
 }
 
-function driveTo(color: number): boolean {
-    if (stopped) return false
+function headingError(target: number, heading: number): number {
+    return (target - heading + 540) % 360 - 180
+}
+
+function pivotTo(target: number): boolean {
     let start = input.runningTime()
-    let lastSeen = start
+    let settled = 0
+    while (!stopped && !atBorder() && input.runningTime() - start < 5000) {
+        let heading = input.compassHeading()
+        if (heading < 0 || heading >= 360 || stopped) break
+        let error = headingError(target, heading)
+        if (Math.abs(error) <= TURN_TOLERANCE_DEG) {
+            stopWheels()
+            settled++
+            if (settled >= 3) return true
+        } else {
+            settled = 0
+            let speed = Math.min(SPEED, 40 + Math.abs(error))
+            if (error > 0) driveSides(LEFT, opposite(RIGHT), speed, speed)
+            else driveSides(opposite(LEFT), RIGHT, speed, speed)
+        }
+        basic.pause(30)
+    }
+    stopWheels()
+    return false
+}
+
+function driveTo(color: number, target: number): boolean {
+    let start = input.runningTime()
     let hits = 0
-    while (!stopped && input.runningTime() - start < SEARCH_MS) {
+    while (!stopped && !atBorder() && input.runningTime() - start < SEARCH_MS) {
         if (floorColor() == color) hits++
         else hits = 0
         if (hits >= 2) break
-        let correction = 0
-        if (FOLLOW_LINE) {
-            let weight = 0
-            let count = 0
-            for (let i = 0; i < LINE_PINS.length; i++) {
-                if (pins.digitalReadPin(LINE_PINS[i]) == BLACK_LEVEL) {
-                    weight += i - 2
-                    count++
-                }
-            }
-            if (count > 0) {
-                lastSeen = input.runningTime()
-                correction = Math.round(SPEED * 0.4 * weight / count)
-            } else if (input.runningTime() - lastSeen >= 300 && hits == 0) {
-                break
-            }
-        }
+        let heading = input.compassHeading()
+        if (heading < 0 || heading >= 360 || stopped) break
+        let correction = Math.max(-SPEED, Math.min(SPEED, 2 * headingError(target, heading)))
         driveSides(LEFT, RIGHT, SPEED + Math.min(0, correction), SPEED - Math.max(0, correction))
         basic.pause(55)
     }
     stopWheels()
-    return !stopped && hits >= 2
+    return !stopped && hits >= 2 && !atBorder()
 }
 
 function moveRack(angle: number) {
@@ -146,6 +155,7 @@ function moveGrip(close: boolean) {
 }
 
 function runRoute(): boolean {
+    if (atBorder()) return false
     if (!sensorReady()) {
         basic.showString("I2C")
         return false
@@ -153,14 +163,16 @@ function runRoute(): boolean {
     moveRack(RACK_UP)
     moveElbow(false)
     moveGrip(false)
-    if (!driveTo(1)) return false
+    let outbound = input.compassHeading()
+    if (outbound < 0 || outbound >= 360 || !driveTo(1, outbound)) return false
     moveElbow(true)
     moveRack(RACK_DOWN)
     moveGrip(true)
     moveRack(RACK_UP)
     moveElbow(false)
-    pivot(TURN_AFTER_PICKUP_MS)
-    if (!driveTo(2)) return false
+    let dropHeading = (outbound + TURN_AFTER_PICKUP_DEG + 360) % 360
+    if (TURN_AFTER_PICKUP_DEG != 0 && !pivotTo(dropHeading)) return false
+    if (!driveTo(2, dropHeading)) return false
     moveElbow(true)
     moveRack(RACK_DOWN)
     moveGrip(false)
@@ -182,4 +194,7 @@ input.onButtonPressed(Button.A, function () {
 })
 
 stopWheels()
+// ให้ micro:bit ขอปรับเทียบครั้งแรกตอนล้อยังหยุด ก่อนผู้ใช้จัดรถเข้าจุดเริ่ม
+input.compassHeading()
+busy = false
 basic.showString("A")
