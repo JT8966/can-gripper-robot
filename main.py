@@ -81,14 +81,16 @@ def floor_color():
     return 0
 
 
-def drive_sides(left: MotionBitMotorDirection, right: MotionBitMotorDirection):
-    if left == right:
+def drive_sides(left: MotionBitMotorDirection, right: MotionBitMotorDirection, trim: number = 0):
+    if left == right and trim == 0:
         motionbit.run_motor(MotionBitMotorChannel.ALL, left, SPEED)
         return
-    motionbit.run_motor(MotionBitMotorChannel.M1, left, SPEED)
-    motionbit.run_motor(MotionBitMotorChannel.M2, left, SPEED)
-    motionbit.run_motor(MotionBitMotorChannel.M3, right, SPEED)
-    motionbit.run_motor(MotionBitMotorChannel.M4, right, SPEED)
+    left_speed = SPEED + min(0, trim)
+    right_speed = SPEED - max(0, trim)
+    motionbit.run_motor(MotionBitMotorChannel.M1, left, left_speed)
+    motionbit.run_motor(MotionBitMotorChannel.M2, left, left_speed)
+    motionbit.run_motor(MotionBitMotorChannel.M3, right, right_speed)
+    motionbit.run_motor(MotionBitMotorChannel.M4, right, right_speed)
 
 
 def opposite(direction: MotionBitMotorDirection):
@@ -127,6 +129,7 @@ def search_for_can(read_colors: bool):
     settled = 0
     previous_color = 0
     near_last_sample = False
+    trim = 0
     while not stopped:
         detected = nb142_detected()
         near = False
@@ -147,12 +150,14 @@ def search_for_can(read_colors: bool):
                 return False
             target = (entry + 90) % 360
             turning = True
+            trim = 0
             turn_started = input.running_time()
             settled = 0
             near_last_sample = False
             continue
         if detected and near:
             stop_wheels()
+            trim = 0
             if near_last_sample:
                 return True
             near_last_sample = True
@@ -173,7 +178,12 @@ def search_for_can(read_colors: bool):
         error = heading_error(target, heading)
         if turning and input.running_time() - turn_started >= 5000:
             return False
-        if abs(error) > TURN_TOLERANCE_DEG:
+        if not turning:
+            amount = min(80, 3 * max(0, abs(error) - 2))
+            desired = amount if error > 0 else -amount
+            trim += max(-16, min(16, desired - trim))
+            drive_sides(LEFT, RIGHT, trim)
+        elif abs(error) > TURN_TOLERANCE_DEG:
             settled = 0
             if error > 0:
                 drive_sides(LEFT, opposite(RIGHT))
@@ -182,12 +192,10 @@ def search_for_can(read_colors: bool):
             # ใกล้มุมเป้าหมายให้หมุนสั้นลง แล้วเบรกก่อนอ่านเข็มทิศซ้ำ
             basic.pause(min(45, abs(error)))
             stop_wheels()
-        elif turning:
+        else:
             stop_wheels()
             settled += 1
             turning = settled < 3
-        else:
-            drive_sides(LEFT, RIGHT)
         basic.pause(65)
     return False
 

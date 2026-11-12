@@ -77,15 +77,17 @@ function floorColor(): number {
     return 0
 }
 
-function driveSides(left: MotionBitMotorDirection, right: MotionBitMotorDirection) {
-    if (left == right) {
+function driveSides(left: MotionBitMotorDirection, right: MotionBitMotorDirection, trim: number = 0) {
+    if (left == right && trim == 0) {
         motionbit.runMotor(MotionBitMotorChannel.All, left, SPEED)
         return
     }
-    motionbit.runMotor(MotionBitMotorChannel.M1, left, SPEED)
-    motionbit.runMotor(MotionBitMotorChannel.M2, left, SPEED)
-    motionbit.runMotor(MotionBitMotorChannel.M3, right, SPEED)
-    motionbit.runMotor(MotionBitMotorChannel.M4, right, SPEED)
+    let leftSpeed = SPEED + Math.min(0, trim)
+    let rightSpeed = SPEED - Math.max(0, trim)
+    motionbit.runMotor(MotionBitMotorChannel.M1, left, leftSpeed)
+    motionbit.runMotor(MotionBitMotorChannel.M2, left, leftSpeed)
+    motionbit.runMotor(MotionBitMotorChannel.M3, right, rightSpeed)
+    motionbit.runMotor(MotionBitMotorChannel.M4, right, rightSpeed)
 }
 
 function opposite(dir: MotionBitMotorDirection): MotionBitMotorDirection {
@@ -122,6 +124,7 @@ function searchForCan(readColors: boolean): boolean {
     let settled = 0
     let previousColor = 0
     let nearLastSample = false
+    let trim = 0
     while (!stopped) {
         let detected = nb142Detected()
         let near = false
@@ -140,6 +143,7 @@ function searchForCan(readColors: boolean): boolean {
             if (stopped) return false
             target = (entry + 90) % 360
             turning = true
+            trim = 0
             turnStarted = input.runningTime()
             settled = 0
             nearLastSample = false
@@ -147,6 +151,7 @@ function searchForCan(readColors: boolean): boolean {
         }
         if (detected && near) {
             stopWheels()
+            trim = 0
             if (nearLastSample) return true
             nearLastSample = true
             basic.pause(65)
@@ -165,19 +170,22 @@ function searchForCan(readColors: boolean): boolean {
         if (heading < 0 || heading >= 360 || stopped) return false
         let error = headingError(target, heading)
         if (turning && input.runningTime() - turnStarted >= 5000) return false
-        if (Math.abs(error) > TURN_TOLERANCE_DEG) {
+        if (!turning) {
+            let amount = Math.min(80, 3 * Math.max(0, Math.abs(error) - 2))
+            let desired = error > 0 ? amount : -amount
+            trim += Math.max(-16, Math.min(16, desired - trim))
+            driveSides(LEFT, RIGHT, trim)
+        } else if (Math.abs(error) > TURN_TOLERANCE_DEG) {
             settled = 0
             if (error > 0) driveSides(LEFT, opposite(RIGHT))
             else driveSides(opposite(LEFT), RIGHT)
             // ใกล้มุมเป้าหมายให้หมุนสั้นลง แล้วเบรกก่อนอ่านเข็มทิศซ้ำ
             basic.pause(Math.min(45, Math.abs(error)))
             stopWheels()
-        } else if (turning) {
+        } else {
             stopWheels()
             settled++
             turning = settled < 3
-        } else {
-            driveSides(LEFT, RIGHT)
         }
         basic.pause(65)
     }
