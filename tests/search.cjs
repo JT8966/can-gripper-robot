@@ -7,7 +7,7 @@ const { stripTypeScriptTypes } = require('node:module')
 const source = stripTypeScriptTypes(fs.readFileSync(path.join(__dirname, '../main.ts'), 'utf8'))
 
 function simulate(cancelWhileReversing) {
-    let ms = 0, heading = 350, black = false, straightTime = 0, nearReadings = 0
+    let ms = 0, heading = 350, detected = true, straightTime = 0, nearReadings = 0
     const reversals = [], turnHeadings = [], servos = [], buttons = {}, wheels = {}
     let icon
     const context = {
@@ -21,7 +21,7 @@ function simulate(cancelWhileReversing) {
             onButtonPressed:(b,fn)=>{buttons[b]=fn}},
         control: {waitMicros(){}},
         pins: {
-            digitalReadPin:p=>Number(p===14 && black), digitalWritePin(){},
+            digitalReadPin:p=>Number(p===14 && detected), digitalWritePin(){},
             i2cWriteNumber(){}, i2cReadNumber:()=>0,
             pulseIn(p) {
                 assert.equal(p,2)
@@ -44,16 +44,18 @@ function simulate(cancelWhileReversing) {
                 assert.equal(wheels[3],wheels[4])
                 if(wheels[1]===1 && wheels[3]===1) {
                     straightTime+=n
-                    if(reversals.length<2 && straightTime >= (reversals.length ? 325 : 9000)) black=true
+                    if(reversals.length<2 && straightTime >= (reversals.length ? 325 : 9000)) detected=false
                 } else if(wheels[1]===-1 && wheels[3]===-1) {
-                    assert(black)
+                    assert.equal(detected,false)
                     reversals.push(n)
                     straightTime=0
-                    black=false
                     if(cancelWhileReversing) buttons.B()
                 } else if(wheels[1]===1 && wheels[3]===-1) {
                     heading=(heading+15)%360
-                    if(heading===80 || heading===170) turnHeadings.push(heading)
+                    if(heading===80 || heading===170) {
+                        turnHeadings.push(heading)
+                        detected=true
+                    }
                 }
             }
         }

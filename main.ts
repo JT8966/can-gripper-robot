@@ -15,7 +15,7 @@ const LEFT = MotionBitMotorDirection.Forward  // เดินหน้าฝั�
 const RIGHT = MotionBitMotorDirection.Forward // เดินหน้าฝั่งขวา: M3A และ M4A
 const PICKUP_DISTANCE_CM = 10 // ค่า X ชั่วคราว วัดจากหน้าหัวอัลตราโซนิก
 const REVERSE_3CM_MS = 180 // เวลาทดลองสำหรับถอย 3 ซม. ที่ SPEED บนพื้นจริง
-const BLACK_LEVEL = 1
+const NB142_DETECTED_LEVEL = 1
 // หัวอ่าน NB142 เรียงจากซ้ายไปขวาตามทิศเดินหน้าของรถ
 const NB142_PINS = [
     DigitalPin.P12, // ซ้ายสุด
@@ -89,9 +89,9 @@ function opposite(dir: MotionBitMotorDirection): MotionBitMotorDirection {
     return MotionBitMotorDirection.Forward
 }
 
-function atBorder(): boolean {
+function nb142Detected(): boolean {
     for (let i = 0; i < NB142_PINS.length; i++) {
-        if (pins.digitalReadPin(NB142_PINS[i]) == BLACK_LEVEL) return true
+        if (pins.digitalReadPin(NB142_PINS[i]) == NB142_DETECTED_LEVEL) return true
     }
     return false
 }
@@ -119,21 +119,21 @@ function searchForCan(readColors: boolean): boolean {
     let previousColor = 0
     let nearLastSample = false
     while (!stopped) {
-        let border = atBorder()
+        let detected = nb142Detected()
         let near = false
-        if (!border) {
+        if (detected) {
             near = objectInReach()
-            border = atBorder()
+            detected = nb142Detected()
         }
         if (stopped) return false
-        if (border) {
+        if (!detected && !turning) {
             stopWheels()
             let entry = input.compassHeading()
             if (entry < 0 || entry >= 360 || stopped) return false
             driveSides(opposite(LEFT), opposite(RIGHT), SPEED, SPEED)
             basic.pause(REVERSE_3CM_MS)
             stopWheels()
-            if (stopped || atBorder()) return false
+            if (stopped) return false
             target = (entry + 90) % 360
             turning = true
             turnStarted = input.runningTime()
@@ -141,7 +141,7 @@ function searchForCan(readColors: boolean): boolean {
             nearLastSample = false
             continue
         }
-        if (near) {
+        if (detected && near) {
             stopWheels()
             if (nearLastSample) return true
             nearLastSample = true
