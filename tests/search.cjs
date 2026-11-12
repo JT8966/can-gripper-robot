@@ -1,0 +1,78 @@
+// Run with Node 24: node tests/search.cjs
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+const vm = require('node:vm')
+const { stripTypeScriptTypes } = require('node:module')
+const source = stripTypeScriptTypes(fs.readFileSync(path.join(__dirname, '../main.ts'), 'utf8'))
+
+function simulate(cancelWhileReversing) {
+    let ms = 0, heading = 350, black = false, straightTime = 0, nearReadings = 0
+    const reversals = [], turnHeadings = [], servos = [], buttons = {}, wheels = {}
+    let icon
+    const context = {
+        DigitalPin: {P1:1, P2:2, P12:12, P13:13, P14:14, P15:15, P16:16},
+        MotionBitMotorDirection: {Forward:1, Backward:-1},
+        MotionBitMotorChannel: {M1:1, M2:2, M3:3, M4:4, All:0},
+        MotionBitServoChannel: {S1:1, S2:2, S3:3, S4:4, S5:5},
+        Button: {A:'A', B:'B'}, IconNames: {Yes:1, No:0}, PulseValue: {High:1},
+        NumberFormat: {UInt8LE:0},
+        input: {runningTime:()=>ms, compassHeading:()=>heading,
+            onButtonPressed:(b,fn)=>{buttons[b]=fn}},
+        control: {waitMicros(){}},
+        pins: {
+            digitalReadPin:p=>Number(p===14 && black), digitalWritePin(){},
+            i2cWriteNumber(){}, i2cReadNumber:()=>0,
+            pulseIn(p) {
+                assert.equal(p,2)
+                if (reversals.length < 2 || straightTime < 325) return ms%2 ? 0 : 5800
+                if (nearReadings++) assert.equal(wheels[1],0)
+                return 580
+            }
+        },
+        motionbit: {
+            runMotor:(m,d,s)=>{wheels[m]=s ? d : 0},
+            brakeMotor(){for(let m=1;m<=4;m++) wheels[m]=0},
+            setServoPosition(p,a) {assert.equal(wheels[1],0);servos.push([p,a])}
+        },
+        basic: {
+            showString(){}, clearScreen(){}, showIcon:i=>{icon=i},
+            pause(n) {
+                ms+=n
+                assert(ms < 30000, 'route failed to finish')
+                assert.equal(wheels[1],wheels[2])
+                assert.equal(wheels[3],wheels[4])
+                if(wheels[1]===1 && wheels[3]===1) {
+                    straightTime+=n
+                    if(reversals.length<2 && straightTime >= (reversals.length ? 325 : 9000)) black=true
+                } else if(wheels[1]===-1 && wheels[3]===-1) {
+                    assert(black)
+                    reversals.push(n)
+                    straightTime=0
+                    black=false
+                    if(cancelWhileReversing) buttons.B()
+                } else if(wheels[1]===1 && wheels[3]===-1) {
+                    heading=(heading+15)%360
+                    if(heading===80 || heading===170) turnHeadings.push(heading)
+                }
+            }
+        }
+    }
+    vm.runInNewContext(source,context)
+    buttons.A()
+    assert.equal(wheels[1],0)
+    assert.equal(wheels[3],0)
+    return {reversals,turnHeadings,servos,icon}
+}
+
+const run=simulate(false)
+assert.deepEqual(run.reversals,[180,180])
+assert.deepEqual(run.turnHeadings,[80,170])
+assert.deepEqual(run.servos.map(([pin])=>pin),[1,4,5,2,3,1,2,3,4,5])
+assert.deepEqual(run.servos.slice(5,8),[[1,55],[2,95],[3,85]])
+assert.equal(run.icon,1)
+const cancelled=simulate(true)
+assert.deepEqual(cancelled.reversals,[180])
+assert.equal(cancelled.servos.length,5)
+assert.equal(cancelled.icon,0)
+console.log('Continuous search, two boundary turns, sonar pickup and B stop passed.')

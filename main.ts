@@ -2,10 +2,10 @@
 const RACK_UP = 85
 const RACK_DOWN = 55
 // ค่าตั้งต้นสำหรับสองฝั่งที่ติดตั้งหันเข้าหากัน ปรับแต่ละฝั่งตามกลไกจริง
-const ELBOW_LEFT_FOLDED = 90
-const ELBOW_RIGHT_FOLDED = 90
-const ELBOW_LEFT_REACH = 110
-const ELBOW_RIGHT_REACH = 70
+const ROTATE_LEFT_READY = 90
+const ROTATE_RIGHT_READY = 90
+const ROTATE_LEFT_AFTER_GRIP = 90
+const ROTATE_RIGHT_AFTER_GRIP = 90
 const GRIP_LEFT_OPEN = 65
 const GRIP_RIGHT_OPEN = 115
 const GRIP_LEFT_CLOSED = 95
@@ -13,7 +13,8 @@ const GRIP_RIGHT_CLOSED = 85
 const SPEED = 65 // 0–255
 const LEFT = MotionBitMotorDirection.Forward  // เดินหน้าฝั่งซ้าย: M1A และ M2A
 const RIGHT = MotionBitMotorDirection.Forward // เดินหน้าฝั่งขวา: M3A และ M4A
-const SEARCH_MS = 8000
+const PICKUP_DISTANCE_CM = 10 // ค่า X ชั่วคราว วัดจากหน้าหัวอัลตราโซนิก
+const REVERSE_3CM_MS = 180 // เวลาทดลองสำหรับถอย 3 ซม. ที่ SPEED บนพื้นจริง
 const BLACK_LEVEL = 1
 // หัวอ่าน NB142 เรียงจากซ้ายไปขวาตามทิศเดินหน้าของรถ
 const NB142_PINS = [
@@ -23,8 +24,6 @@ const NB142_PINS = [
     DigitalPin.P15, // ขวากลาง
     DigitalPin.P16  // ขวาสุด
 ]
-// มุมจากแนวเริ่มต้น: บวกเลี้ยวขวา ลบเลี้ยวซ้าย
-const TURN_AFTER_PICKUP_DEG = 90
 const TURN_TOLERANCE_DEG = 4
 let address = 0x29
 let busy = true
@@ -101,90 +100,118 @@ function headingError(target: number, heading: number): number {
     return (target - heading + 540) % 360 - 180
 }
 
-function pivotTo(target: number): boolean {
-    let start = input.runningTime()
-    let settled = 0
-    while (!stopped && !atBorder() && input.runningTime() - start < 5000) {
-        let heading = input.compassHeading()
-        if (heading < 0 || heading >= 360 || stopped) break
-        let error = headingError(target, heading)
-        if (Math.abs(error) <= TURN_TOLERANCE_DEG) {
-            stopWheels()
-            settled++
-            if (settled >= 3) return true
-        } else {
-            settled = 0
-            let speed = Math.min(SPEED, 40 + Math.abs(error))
-            if (error > 0) driveSides(LEFT, opposite(RIGHT), speed, speed)
-            else driveSides(opposite(LEFT), RIGHT, speed, speed)
-        }
-        basic.pause(30)
-    }
-    stopWheels()
-    return false
+function objectInReach(): boolean {
+    pins.digitalWritePin(DigitalPin.P1, 0)
+    control.waitMicros(2)
+    pins.digitalWritePin(DigitalPin.P1, 1)
+    control.waitMicros(10)
+    pins.digitalWritePin(DigitalPin.P1, 0)
+    let echoUs = pins.pulseIn(DigitalPin.P2, PulseValue.High, 25000)
+    return echoUs > 0 && echoUs <= PICKUP_DISTANCE_CM * 58
 }
 
-function driveTo(color: number, target: number): boolean {
-    let start = input.runningTime()
-    let hits = 0
-    while (!stopped && !atBorder() && input.runningTime() - start < SEARCH_MS) {
-        if (floorColor() == color) hits++
-        else hits = 0
-        if (hits >= 2) break
+function searchForCan(readColors: boolean): boolean {
+    let target = input.compassHeading()
+    if (target < 0 || target >= 360) return false
+    let turning = false
+    let turnStarted = 0
+    let settled = 0
+    let previousColor = 0
+    let nearLastSample = false
+    while (!stopped) {
+        let border = atBorder()
+        let near = false
+        if (!border) {
+            near = objectInReach()
+            border = atBorder()
+        }
+        if (stopped) return false
+        if (border) {
+            stopWheels()
+            let entry = input.compassHeading()
+            if (entry < 0 || entry >= 360 || stopped) return false
+            driveSides(opposite(LEFT), opposite(RIGHT), SPEED, SPEED)
+            basic.pause(REVERSE_3CM_MS)
+            stopWheels()
+            if (stopped || atBorder()) return false
+            target = (entry + 90) % 360
+            turning = true
+            turnStarted = input.runningTime()
+            settled = 0
+            nearLastSample = false
+            continue
+        }
+        if (near) {
+            stopWheels()
+            if (nearLastSample) return true
+            nearLastSample = true
+            basic.pause(65)
+            continue
+        }
+        nearLastSample = false
+        if (readColors) {
+            let color = floorColor()
+            if (color != previousColor) {
+                if (color == 1) serial.writeLine("RED")
+                if (color == 2) serial.writeLine("BLUE")
+                previousColor = color
+            }
+        }
         let heading = input.compassHeading()
-        if (heading < 0 || heading >= 360 || stopped) break
-        let correction = Math.max(-SPEED, Math.min(SPEED, 2 * headingError(target, heading)))
-        driveSides(LEFT, RIGHT, SPEED + Math.min(0, correction), SPEED - Math.max(0, correction))
-        basic.pause(55)
+        if (heading < 0 || heading >= 360 || stopped) return false
+        let error = headingError(target, heading)
+        if (turning) {
+            if (input.runningTime() - turnStarted >= 5000) return false
+            if (Math.abs(error) <= TURN_TOLERANCE_DEG) {
+                stopWheels()
+                settled++
+                turning = settled < 3
+            } else {
+                settled = 0
+                let speed = Math.min(SPEED, 40 + Math.abs(error))
+                if (error > 0) driveSides(LEFT, opposite(RIGHT), speed, speed)
+                else driveSides(opposite(LEFT), RIGHT, speed, speed)
+            }
+        } else {
+            let correction = Math.max(-SPEED, Math.min(SPEED, 2 * error))
+            driveSides(LEFT, RIGHT, SPEED + Math.min(0, correction), SPEED - Math.max(0, correction))
+        }
+        basic.pause(65)
     }
-    stopWheels()
-    return !stopped && hits >= 2 && !atBorder()
+    return false
 }
 
 function moveRack(angle: number) {
     if (stopped) return
-    motionbit.setServoPosition(MotionBitServoChannel.S4, angle)
+    motionbit.setServoPosition(MotionBitServoChannel.S1, angle)
     basic.pause(550)
 }
 
-function moveElbow(reach: boolean) {
+function rotateGrip(afterGrip: boolean) {
     if (stopped) return
-    motionbit.setServoPosition(MotionBitServoChannel.S3, reach ? ELBOW_LEFT_REACH : ELBOW_LEFT_FOLDED)
-    motionbit.setServoPosition(MotionBitServoChannel.S5, reach ? ELBOW_RIGHT_REACH : ELBOW_RIGHT_FOLDED)
+    motionbit.setServoPosition(MotionBitServoChannel.S4, afterGrip ? ROTATE_LEFT_AFTER_GRIP : ROTATE_LEFT_READY)
+    motionbit.setServoPosition(MotionBitServoChannel.S5, afterGrip ? ROTATE_RIGHT_AFTER_GRIP : ROTATE_RIGHT_READY)
     basic.pause(550)
 }
 
 function moveGrip(close: boolean) {
     if (stopped) return
-    motionbit.setServoPosition(MotionBitServoChannel.S8, close ? GRIP_LEFT_CLOSED : GRIP_LEFT_OPEN)
-    motionbit.setServoPosition(MotionBitServoChannel.S6, close ? GRIP_RIGHT_CLOSED : GRIP_RIGHT_OPEN)
+    motionbit.setServoPosition(MotionBitServoChannel.S2, close ? GRIP_LEFT_CLOSED : GRIP_LEFT_OPEN)
+    motionbit.setServoPosition(MotionBitServoChannel.S3, close ? GRIP_RIGHT_CLOSED : GRIP_RIGHT_OPEN)
     basic.pause(550)
 }
 
 function runRoute(): boolean {
-    if (atBorder()) return false
-    if (!sensorReady()) {
-        basic.showString("I2C")
-        return false
-    }
+    let readColors = sensorReady()
     moveRack(RACK_UP)
-    moveElbow(false)
+    rotateGrip(false)
     moveGrip(false)
-    let outbound = input.compassHeading()
-    if (outbound < 0 || outbound >= 360 || !driveTo(1, outbound)) return false
-    moveElbow(true)
+    let found = searchForCan(readColors)
+    stopWheels()
+    if (!found || stopped) return false
     moveRack(RACK_DOWN)
     moveGrip(true)
-    moveRack(RACK_UP)
-    moveElbow(false)
-    let dropHeading = (outbound + TURN_AFTER_PICKUP_DEG + 360) % 360
-    if (TURN_AFTER_PICKUP_DEG != 0 && !pivotTo(dropHeading)) return false
-    if (!driveTo(2, dropHeading)) return false
-    moveElbow(true)
-    moveRack(RACK_DOWN)
-    moveGrip(false)
-    moveRack(RACK_UP)
-    moveElbow(false)
+    rotateGrip(true)
     return !stopped
 }
 
