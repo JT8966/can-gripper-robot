@@ -9,7 +9,7 @@ const source = stripTypeScriptTypes(fs.readFileSync(path.join(__dirname, '../mai
 function simulate(cancelWhileReversing) {
     let ms = 0, heading = 350, detected = true, straightTime = 0, nearReadings = 0
     const reversals = [], turnHeadings = [], servos = [], buttons = {}, wheels = {}
-    let icon
+    let icon, correctedLeft = false, drifted = false
     const context = {
         DigitalPin: {P1:1, P2:2, P12:12, P13:13, P14:14, P15:15, P16:16},
         MotionBitMotorDirection: {Forward:1, Backward:-1},
@@ -31,7 +31,14 @@ function simulate(cancelWhileReversing) {
             }
         },
         motionbit: {
-            runMotor:(m,d,s)=>{wheels[m]=s ? d : 0},
+            runMotor(m,d,s) {
+                assert.equal(s,255)
+                if(m===0) {
+                    for(let motor=1;motor<=4;motor++) wheels[motor]=d
+                } else {
+                    wheels[m]=d
+                }
+            },
             brakeMotor(){for(let m=1;m<=4;m++) wheels[m]=0},
             setServoPosition(p,a) {assert.equal(wheels[1],0);servos.push([p,a])}
         },
@@ -44,12 +51,19 @@ function simulate(cancelWhileReversing) {
                 assert.equal(wheels[3],wheels[4])
                 if(wheels[1]===1 && wheels[3]===1) {
                     straightTime+=n
+                    if(!drifted) {
+                        heading=(heading+15)%360
+                        drifted=true
+                    }
                     if(reversals.length<2 && straightTime >= (reversals.length ? 325 : 9000)) detected=false
                 } else if(wheels[1]===-1 && wheels[3]===-1) {
                     assert.equal(detected,false)
                     reversals.push(n)
                     straightTime=0
                     if(cancelWhileReversing) buttons.B()
+                } else if(wheels[1]===-1 && wheels[3]===1) {
+                    heading=(heading+360-15)%360
+                    correctedLeft=true
                 } else if(wheels[1]===1 && wheels[3]===-1) {
                     heading=(heading+15)%360
                     if(heading===80 || heading===170) {
@@ -64,17 +78,18 @@ function simulate(cancelWhileReversing) {
     buttons.A()
     assert.equal(wheels[1],0)
     assert.equal(wheels[3],0)
-    return {reversals,turnHeadings,servos,icon}
+    return {reversals,turnHeadings,servos,icon,correctedLeft}
 }
 
 const run=simulate(false)
-assert.deepEqual(run.reversals,[180,180])
+assert.deepEqual(run.reversals,[50,50])
+assert(run.correctedLeft)
 assert.deepEqual(run.turnHeadings,[80,170])
 assert.deepEqual(run.servos.map(([pin])=>pin),[1,4,5,2,3,1,2,3,4,5])
 assert.deepEqual(run.servos.slice(5,8),[[1,55],[2,95],[3,85]])
 assert.equal(run.icon,1)
 const cancelled=simulate(true)
-assert.deepEqual(cancelled.reversals,[180])
+assert.deepEqual(cancelled.reversals,[50])
 assert.equal(cancelled.servos.length,5)
 assert.equal(cancelled.icon,0)
 console.log('Continuous search, two boundary turns, sonar pickup and B stop passed.')

@@ -10,11 +10,11 @@ const GRIP_LEFT_OPEN = 65
 const GRIP_RIGHT_OPEN = 115
 const GRIP_LEFT_CLOSED = 95
 const GRIP_RIGHT_CLOSED = 85
-const SPEED = 65 // 0–255
+const SPEED = 255 // กำลังขับเต็มของ MOTION:BIT
 const LEFT = MotionBitMotorDirection.Forward  // เดินหน้าฝั่งซ้าย: M1A และ M2A
 const RIGHT = MotionBitMotorDirection.Forward // เดินหน้าฝั่งขวา: M3A และ M4A
 const PICKUP_DISTANCE_CM = 10 // ค่า X ชั่วคราว วัดจากหน้าหัวอัลตราโซนิก
-const REVERSE_3CM_MS = 180 // เวลาทดลองสำหรับถอย 3 ซม. ที่ SPEED บนพื้นจริง
+const REVERSE_3CM_MS = 50 // ค่าเริ่มทดลอง ต้องวัดระยะถอยบนพื้นจริงที่กำลังเต็ม
 const NB142_DETECTED_LEVEL = 1
 // หัวอ่าน NB142 เรียงจากซ้ายไปขวาตามทิศเดินหน้าของรถ
 const NB142_PINS = [
@@ -77,11 +77,15 @@ function floorColor(): number {
     return 0
 }
 
-function driveSides(left: MotionBitMotorDirection, right: MotionBitMotorDirection, leftSpeed: number, rightSpeed: number) {
-    motionbit.runMotor(MotionBitMotorChannel.M1, left, leftSpeed)
-    motionbit.runMotor(MotionBitMotorChannel.M2, left, leftSpeed)
-    motionbit.runMotor(MotionBitMotorChannel.M3, right, rightSpeed)
-    motionbit.runMotor(MotionBitMotorChannel.M4, right, rightSpeed)
+function driveSides(left: MotionBitMotorDirection, right: MotionBitMotorDirection) {
+    if (left == right) {
+        motionbit.runMotor(MotionBitMotorChannel.All, left, SPEED)
+        return
+    }
+    motionbit.runMotor(MotionBitMotorChannel.M1, left, SPEED)
+    motionbit.runMotor(MotionBitMotorChannel.M2, left, SPEED)
+    motionbit.runMotor(MotionBitMotorChannel.M3, right, SPEED)
+    motionbit.runMotor(MotionBitMotorChannel.M4, right, SPEED)
 }
 
 function opposite(dir: MotionBitMotorDirection): MotionBitMotorDirection {
@@ -130,7 +134,7 @@ function searchForCan(readColors: boolean): boolean {
             stopWheels()
             let entry = input.compassHeading()
             if (entry < 0 || entry >= 360 || stopped) return false
-            driveSides(opposite(LEFT), opposite(RIGHT), SPEED, SPEED)
+            driveSides(opposite(LEFT), opposite(RIGHT))
             basic.pause(REVERSE_3CM_MS)
             stopWheels()
             if (stopped) return false
@@ -160,21 +164,20 @@ function searchForCan(readColors: boolean): boolean {
         let heading = input.compassHeading()
         if (heading < 0 || heading >= 360 || stopped) return false
         let error = headingError(target, heading)
-        if (turning) {
-            if (input.runningTime() - turnStarted >= 5000) return false
-            if (Math.abs(error) <= TURN_TOLERANCE_DEG) {
-                stopWheels()
-                settled++
-                turning = settled < 3
-            } else {
-                settled = 0
-                let speed = Math.min(SPEED, 40 + Math.abs(error))
-                if (error > 0) driveSides(LEFT, opposite(RIGHT), speed, speed)
-                else driveSides(opposite(LEFT), RIGHT, speed, speed)
-            }
+        if (turning && input.runningTime() - turnStarted >= 5000) return false
+        if (Math.abs(error) > TURN_TOLERANCE_DEG) {
+            settled = 0
+            if (error > 0) driveSides(LEFT, opposite(RIGHT))
+            else driveSides(opposite(LEFT), RIGHT)
+            // ใกล้มุมเป้าหมายให้หมุนสั้นลง แล้วเบรกก่อนอ่านเข็มทิศซ้ำ
+            basic.pause(Math.min(45, Math.abs(error)))
+            stopWheels()
+        } else if (turning) {
+            stopWheels()
+            settled++
+            turning = settled < 3
         } else {
-            let correction = Math.max(-SPEED, Math.min(SPEED, 2 * error))
-            driveSides(LEFT, RIGHT, SPEED + Math.min(0, correction), SPEED - Math.max(0, correction))
+            driveSides(LEFT, RIGHT)
         }
         basic.pause(65)
     }
