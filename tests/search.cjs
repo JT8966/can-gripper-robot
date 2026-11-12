@@ -11,7 +11,7 @@ function simulate(cancelWhileReversing) {
     const reversals = [], turnHeadings = [], servos = [], buttons = {}, wheels = {}
     let icon, correctedLeft = false, drifted = false
     const context = {
-        DigitalPin: {P1:1, P2:2, P12:12, P13:13, P14:14, P15:15, P16:16},
+        DigitalPin: {P0:0, P1:1, P12:12, P13:13, P14:14, P15:15, P16:16},
         MotionBitMotorDirection: {Forward:1, Backward:-1},
         MotionBitMotorChannel: {M1:1, M2:2, M3:3, M4:4, All:0},
         MotionBitServoChannel: {S1:1, S2:2, S3:3, S4:4, S5:5},
@@ -21,10 +21,11 @@ function simulate(cancelWhileReversing) {
             onButtonPressed:(b,fn)=>{buttons[b]=fn}},
         control: {waitMicros(){}},
         pins: {
-            digitalReadPin:p=>Number(p===14 && detected), digitalWritePin(){},
+            digitalReadPin:p=>Number(p===14 && detected),
+            digitalWritePin(p){assert.equal(p,0)},
             i2cWriteNumber(){}, i2cReadNumber:()=>0,
             pulseIn(p) {
-                assert.equal(p,2)
+                assert.equal(p,1)
                 if (reversals.length < 2 || straightTime < 325) return ms%2 ? 0 : 5800
                 if (nearReadings++) assert.equal(wheels[1],0)
                 return 580

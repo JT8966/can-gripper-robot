@@ -109,12 +109,12 @@ def heading_error(target: number, heading: number):
 
 
 def object_in_reach():
-    pins.digital_write_pin(DigitalPin.P1, 0)
+    pins.digital_write_pin(DigitalPin.P0, 0)
     control.wait_micros(2)
-    pins.digital_write_pin(DigitalPin.P1, 1)
+    pins.digital_write_pin(DigitalPin.P0, 1)
     control.wait_micros(10)
-    pins.digital_write_pin(DigitalPin.P1, 0)
-    echo_us = pins.pulse_in(DigitalPin.P2, PulseValue.HIGH, 25000)
+    pins.digital_write_pin(DigitalPin.P0, 0)
+    echo_us = pins.pulse_in(DigitalPin.P1, PulseValue.HIGH, 25000)
     return echo_us > 0 and echo_us <= PICKUP_DISTANCE_CM * 58
 
 

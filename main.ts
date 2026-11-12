@@ -105,12 +105,12 @@ function headingError(target: number, heading: number): number {
 }
 
 function objectInReach(): boolean {
-    pins.digitalWritePin(DigitalPin.P1, 0)
+    pins.digitalWritePin(DigitalPin.P0, 0)
     control.waitMicros(2)
-    pins.digitalWritePin(DigitalPin.P1, 1)
+    pins.digitalWritePin(DigitalPin.P0, 1)
     control.waitMicros(10)
-    pins.digitalWritePin(DigitalPin.P1, 0)
-    let echoUs = pins.pulseIn(DigitalPin.P2, PulseValue.High, 25000)
+    pins.digitalWritePin(DigitalPin.P0, 0)
+    let echoUs = pins.pulseIn(DigitalPin.P1, PulseValue.High, 25000)
     return echoUs > 0 && echoUs <= PICKUP_DISTANCE_CM * 58
 }
 
