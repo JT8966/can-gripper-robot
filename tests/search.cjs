@@ -67,7 +67,10 @@ function simulate(cancelWhileReversing, driftDegrees = 15) {
                     assert.equal(Math.max(power[1],power[3]),255)
                     assert(Math.abs(trim-lastTrim)<=16)
                     lastTrim=trim
-                    if(!drifted) {
+                    if(!drifted && straightTime<=3*n) {
+                        assert.equal(trim,16,'reduce right power at launch')
+                    } else if(!drifted) {
+                        assert.equal(trim,0,'remove launch bias once heading is steady')
                         heading=(heading+driftDegrees+360)%360
                         drifted=true
                     } else if(!corrected && trim!==0) {

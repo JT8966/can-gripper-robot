@@ -12,6 +12,7 @@ GRIP_LEFT_CLOSED = 95
 GRIP_RIGHT_CLOSED = 85
 SPEED = 255
 # กำลังขับเต็มของ MOTION:BIT
+START_RIGHT_TRIM = 16  # ผ่อนล้อขวาช่วงออกตัวเพื่อชดเชยอาการเบ้ซ้าย
 LEFT = MotionBitMotorDirection.FORWARD
 # เดินหน้าฝั่งซ้าย: M1A และ M2A
 RIGHT = MotionBitMotorDirection.FORWARD
@@ -130,6 +131,7 @@ def search_for_can(read_colors: bool):
     previous_color = 0
     near_last_sample = False
     trim = 0
+    launch_cycles = 3
     while not stopped:
         detected = nb142_detected()
         near = False
@@ -150,6 +152,7 @@ def search_for_can(read_colors: bool):
                 return False
             target = (entry + 90) % 360
             turning = True
+            launch_cycles = 0
             trim = 0
             turn_started = input.running_time()
             settled = 0
@@ -181,6 +184,9 @@ def search_for_can(read_colors: bool):
         if not turning:
             amount = min(80, 3 * max(0, abs(error) - 2))
             desired = amount if error > 0 else -amount
+            if launch_cycles > 0:
+                desired = max(-80, min(80, desired + START_RIGHT_TRIM))
+                launch_cycles -= 1
             trim += max(-16, min(16, desired - trim))
             drive_sides(LEFT, RIGHT, trim)
         elif abs(error) > TURN_TOLERANCE_DEG:

@@ -11,6 +11,7 @@ const GRIP_RIGHT_OPEN = 115
 const GRIP_LEFT_CLOSED = 95
 const GRIP_RIGHT_CLOSED = 85
 const SPEED = 255 // กำลังขับเต็มของ MOTION:BIT
+const START_RIGHT_TRIM = 16 // ผ่อนล้อขวาช่วงออกตัวเพื่อชดเชยอาการเบ้ซ้าย
 const LEFT = MotionBitMotorDirection.Forward  // เดินหน้าฝั่งซ้าย: M1A และ M2A
 const RIGHT = MotionBitMotorDirection.Forward // เดินหน้าฝั่งขวา: M3A และ M4A
 const PICKUP_DISTANCE_CM = 10 // ค่า X ชั่วคราว วัดจากหน้าหัวอัลตราโซนิก
@@ -125,6 +126,7 @@ function searchForCan(readColors: boolean): boolean {
     let previousColor = 0
     let nearLastSample = false
     let trim = 0
+    let launchCycles = 3
     while (!stopped) {
         let detected = nb142Detected()
         let near = false
@@ -143,6 +145,7 @@ function searchForCan(readColors: boolean): boolean {
             if (stopped) return false
             target = (entry + 90) % 360
             turning = true
+            launchCycles = 0
             trim = 0
             turnStarted = input.runningTime()
             settled = 0
@@ -173,6 +176,10 @@ function searchForCan(readColors: boolean): boolean {
         if (!turning) {
             let amount = Math.min(80, 3 * Math.max(0, Math.abs(error) - 2))
             let desired = error > 0 ? amount : -amount
+            if (launchCycles > 0) {
+                desired = Math.max(-80, Math.min(80, desired + START_RIGHT_TRIM))
+                launchCycles--
+            }
             trim += Math.max(-16, Math.min(16, desired - trim))
             driveSides(LEFT, RIGHT, trim)
         } else if (Math.abs(error) > TURN_TOLERANCE_DEG) {
