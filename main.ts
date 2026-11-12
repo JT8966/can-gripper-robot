@@ -11,8 +11,8 @@ const GRIP_RIGHT_OPEN = 115
 const GRIP_LEFT_CLOSED = 95
 const GRIP_RIGHT_CLOSED = 85
 const SPEED = 65 // 0–255
-const LEFT = MotionBitMotorDirection.Forward
-const RIGHT = MotionBitMotorDirection.Forward
+const LEFT = MotionBitMotorDirection.Forward  // เดินหน้าฝั่งซ้าย: M1A และ M2A
+const RIGHT = MotionBitMotorDirection.Forward // เดินหน้าฝั่งขวา: M3A และ M4A
 const SEARCH_MS = 8000
 const BLACK_LEVEL = 1
 // หัวอ่าน NB142 เรียงจากซ้ายไปขวาตามทิศเดินหน้าของรถ
