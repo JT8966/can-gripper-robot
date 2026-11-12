@@ -15,7 +15,14 @@ const LEFT = MotionBitMotorDirection.Forward
 const RIGHT = MotionBitMotorDirection.Forward
 const SEARCH_MS = 8000
 const BLACK_LEVEL = 1
-const LINE_PINS = [DigitalPin.P12, DigitalPin.P13, DigitalPin.P14, DigitalPin.P15, DigitalPin.P16]
+// หัวอ่าน NB142 เรียงจากซ้ายไปขวาตามทิศเดินหน้าของรถ
+const NB142_PINS = [
+    DigitalPin.P12, // ซ้ายสุด
+    DigitalPin.P13, // ซ้ายกลาง
+    DigitalPin.P14, // กลาง
+    DigitalPin.P15, // ขวากลาง
+    DigitalPin.P16  // ขวาสุด
+]
 // มุมจากแนวเริ่มต้น: บวกเลี้ยวขวา ลบเลี้ยวซ้าย
 const TURN_AFTER_PICKUP_DEG = 90
 const TURN_TOLERANCE_DEG = 4
@@ -84,8 +91,8 @@ function opposite(dir: MotionBitMotorDirection): MotionBitMotorDirection {
 }
 
 function atBorder(): boolean {
-    for (let i = 0; i < LINE_PINS.length; i++) {
-        if (pins.digitalReadPin(LINE_PINS[i]) == BLACK_LEVEL) return true
+    for (let i = 0; i < NB142_PINS.length; i++) {
+        if (pins.digitalReadPin(NB142_PINS[i]) == BLACK_LEVEL) return true
     }
     return false
 }
