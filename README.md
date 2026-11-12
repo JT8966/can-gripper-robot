@@ -10,6 +10,10 @@
 | เปิดโปรเจกต์พร้อมส่วนขยาย MOTION:BIT | นำเข้าลิงก์รีโปทั้งโปรเจกต์ MakeCode จะอ่าน `pxt.json` เพื่อโหลดส่วนขยาย |
 | ลงโปรแกรมบน micro:bit | ใช้ไฟล์ `.hex` ที่ MakeCode สร้างเมื่อกด **Download** |
 
+### ใช้โค้ด Python
+
+เปิดโปรเจกต์ใหม่ใน [MakeCode สำหรับ micro:bit](https://makecode.microbit.org/) เพิ่มส่วนขยาย **MOTION:BIT** ของ Cytron ใน **Extensions** เลือกภาษา **Python** แล้วคัดลอกโค้ดทั้งไฟล์ [main.py](./main.py) ไปแทนที่โค้ดเดิม กด **Download** เพื่อลงบอร์ด ไฟล์นี้ใช้ API ของ MakeCode Python
+
 ## ลงโปรแกรมครั้งแรก
 
 1. เปิด [MakeCode สำหรับ micro:bit](https://makecode.microbit.org/) แล้วเลือก **Import → Import URL**
