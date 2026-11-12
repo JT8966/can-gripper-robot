@@ -6,11 +6,13 @@ const vm = require('node:vm')
 const { stripTypeScriptTypes } = require('node:module')
 const source = stripTypeScriptTypes(fs.readFileSync(path.join(__dirname, '../main.ts'), 'utf8'))
 
-function simulate(cancelWhileReversing, driftDegrees = 15) {
+function simulate(cancelWhileReversing, driftDegrees = 15, turnStep = 15) {
     let ms = 0, heading = 350, detected = true, straightTime = 0, nearReadings = 0
     const reversals = [], turnHeadings = [], servos = [], buttons = {}, wheels = {}
     let icon, corrected = false, drifted = false, lastTrim = 0
     const power = {}
+    let pivotDegrees = 0, pivotStarts = 0
+    let launchReadings = 0
     const context = {
         DigitalPin: {P0:0, P1:1, P12:12, P13:13, P14:14, P15:15, P16:16},
         MotionBitMotorDirection: {Forward:1, Backward:-1},
@@ -18,7 +20,10 @@ function simulate(cancelWhileReversing, driftDegrees = 15) {
         MotionBitServoChannel: {S1:1, S2:2, S3:3, S4:4, S5:5},
         Button: {A:'A', B:'B'}, IconNames: {Yes:1, No:0}, PulseValue: {High:1},
         NumberFormat: {UInt8LE:0},
-        input: {runningTime:()=>ms, compassHeading:()=>heading,
+        input: {runningTime:()=>ms, compassHeading() {
+                if(ms>0 && !drifted && ++launchReadings===2) return (heading+10)%360
+                return heading
+            },
             onButtonPressed:(b,fn)=>{buttons[b]=fn}},
         control: {waitMicros(){}},
         pins: {
@@ -34,6 +39,7 @@ function simulate(cancelWhileReversing, driftDegrees = 15) {
         },
         motionbit: {
             runMotor(m,d,s) {
+                if(m===3 && d===-1 && wheels[1]===1) pivotStarts++
                 assert(s >= 175 && s <= 255)
                 if(m===0) {
                     assert.equal(s,255)
@@ -47,6 +53,10 @@ function simulate(cancelWhileReversing, driftDegrees = 15) {
                 }
             },
             brakeMotor(){
+                if(wheels[1]===1 && wheels[3]===-1) {
+                    assert(pivotDegrees>=86, 'braked partway through the right pivot')
+                    turnHeadings.push(heading)
+                }
                 assert(!(drifted && detected && reversals.length===0), 'braked while correcting straight travel')
                 for(let m=1;m<=4;m++) wheels[m]=0
             },
@@ -67,10 +77,8 @@ function simulate(cancelWhileReversing, driftDegrees = 15) {
                     assert.equal(Math.max(power[1],power[3]),255)
                     assert(Math.abs(trim-lastTrim)<=16)
                     lastTrim=trim
-                    if(!drifted && straightTime<=3*n) {
-                        assert.equal(trim,16,'reduce right power at launch')
-                    } else if(!drifted) {
-                        assert.equal(trim,0,'remove launch bias once heading is steady')
+                    if(!drifted) {
+                        assert.equal(trim,0,'all four motors must launch at 255')
                         heading=(heading+driftDegrees+360)%360
                         drifted=true
                     } else if(!corrected && trim!==0) {
@@ -83,16 +91,15 @@ function simulate(cancelWhileReversing, driftDegrees = 15) {
                     assert.equal(Math.min(power[1],power[3]),255)
                     assert.equal(detected,false)
                     reversals.push(n)
+                    pivotDegrees=0
                     straightTime=0
                     if(cancelWhileReversing) buttons.B()
                 } else if(wheels[1]===1 && wheels[3]===-1) {
                     assert(reversals.length>0,'pivoted while driving straight')
                     assert.equal(Math.min(power[1],power[3]),255)
-                    heading=(heading+15)%360
-                    if(heading===80 || heading===170) {
-                        turnHeadings.push(heading)
-                        detected=true
-                    }
+                    heading=(heading+turnStep)%360
+                    pivotDegrees+=turnStep
+                    if(pivotDegrees>=86) detected=true
                 }
             }
         }
@@ -101,6 +108,7 @@ function simulate(cancelWhileReversing, driftDegrees = 15) {
     buttons.A()
     assert.equal(wheels[1],0)
     assert.equal(wheels[3],0)
+    assert.equal(pivotStarts, turnHeadings.length)
     return {reversals,turnHeadings,servos,icon,corrected}
 }
 
@@ -109,6 +117,7 @@ assert.deepEqual(run.reversals,[50,50])
 assert(run.corrected)
 assert(simulate(false,-15).corrected)
 assert.deepEqual(run.turnHeadings,[80,170])
+assert.deepEqual(simulate(false,15,16).turnHeadings,[86,182])
 assert.deepEqual(run.servos.map(([pin])=>pin),[1,4,5,2,3,1,2,3,4,5])
 assert.deepEqual(run.servos.slice(5,8),[[1,55],[2,95],[3,85]])
 assert.equal(run.icon,1)

@@ -11,7 +11,6 @@ const GRIP_RIGHT_OPEN = 115
 const GRIP_LEFT_CLOSED = 95
 const GRIP_RIGHT_CLOSED = 85
 const SPEED = 255 // กำลังขับเต็มของ MOTION:BIT
-const START_RIGHT_TRIM = 16 // ผ่อนล้อขวาช่วงออกตัวเพื่อชดเชยอาการเบ้ซ้าย
 const LEFT = MotionBitMotorDirection.Forward  // เดินหน้าฝั่งซ้าย: M1A และ M2A
 const RIGHT = MotionBitMotorDirection.Forward // เดินหน้าฝั่งขวา: M3A และ M4A
 const PICKUP_DISTANCE_CM = 10 // ค่า X ชั่วคราว วัดจากหน้าหัวอัลตราโซนิก
@@ -122,16 +121,19 @@ function searchForCan(readColors: boolean): boolean {
     if (target < 0 || target >= 360) return false
     let turning = false
     let turnStarted = 0
-    let settled = 0
+    let turnEntry = 0
+    let pivotPowered = false
+    let nextPing = 0
     let previousColor = 0
     let nearLastSample = false
     let trim = 0
-    let launchCycles = 3
+    let starting = true
     while (!stopped) {
         let detected = nb142Detected()
         let near = false
-        if (detected) {
+        if (detected && input.runningTime() >= nextPing) {
             near = objectInReach()
+            nextPing = input.runningTime() + 65
             detected = nb142Detected()
         }
         if (stopped) return false
@@ -145,16 +147,19 @@ function searchForCan(readColors: boolean): boolean {
             if (stopped) return false
             target = (entry + 90) % 360
             turning = true
-            launchCycles = 0
+            starting = true
             trim = 0
+            turnEntry = entry
+            pivotPowered = false
             turnStarted = input.runningTime()
-            settled = 0
             nearLastSample = false
             continue
         }
         if (detected && near) {
             stopWheels()
             trim = 0
+            starting = true
+            pivotPowered = false
             if (nearLastSample) return true
             nearLastSample = true
             basic.pause(65)
@@ -176,23 +181,24 @@ function searchForCan(readColors: boolean): boolean {
         if (!turning) {
             let amount = Math.min(80, 3 * Math.max(0, Math.abs(error) - 2))
             let desired = error > 0 ? amount : -amount
-            if (launchCycles > 0) {
-                desired = Math.max(-80, Math.min(80, desired + START_RIGHT_TRIM))
-                launchCycles--
+            if (starting) {
+                trim = 0
+                starting = false
+            } else {
+                trim += Math.max(-16, Math.min(16, desired - trim))
             }
-            trim += Math.max(-16, Math.min(16, desired - trim))
             driveSides(LEFT, RIGHT, trim)
-        } else if (Math.abs(error) > TURN_TOLERANCE_DEG) {
-            settled = 0
-            if (error > 0) driveSides(LEFT, opposite(RIGHT))
-            else driveSides(opposite(LEFT), RIGHT)
-            // ใกล้มุมเป้าหมายให้หมุนสั้นลง แล้วเบรกก่อนอ่านเข็มทิศซ้ำ
-            basic.pause(Math.min(45, Math.abs(error)))
-            stopWheels()
+        } else if (headingError(heading, turnEntry) < 90 - TURN_TOLERANCE_DEG) {
+            if (!pivotPowered) {
+                driveSides(LEFT, opposite(RIGHT))
+                pivotPowered = true
+            }
+            basic.pause(10)
+            continue
         } else {
             stopWheels()
-            settled++
-            turning = settled < 3
+            turning = false
+            pivotPowered = false
         }
         basic.pause(65)
     }
