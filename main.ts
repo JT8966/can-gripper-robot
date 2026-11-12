@@ -14,6 +14,9 @@ const SPEED = 65 // 0–255
 const LEFT = MotionBitMotorDirection.Forward
 const RIGHT = MotionBitMotorDirection.Forward
 const SEARCH_MS = 8000
+const FOLLOW_LINE = true
+const BLACK_LEVEL = 1
+const LINE_PINS = [DigitalPin.P12, DigitalPin.P13, DigitalPin.P14, DigitalPin.P15, DigitalPin.P16]
 // หลังยกกระป๋อง: 0 = ตรง, ค่าบวก = หมุนขวา, ค่าลบ = หมุนซ้าย (มิลลิวินาที)
 const TURN_AFTER_PICKUP_MS = 0
 let address = 0x29
@@ -68,11 +71,11 @@ function floorColor(): number {
     return 0
 }
 
-function driveSides(left: MotionBitMotorDirection, right: MotionBitMotorDirection) {
-    motionbit.runMotor(MotionBitMotorChannel.M1, left, SPEED)
-    motionbit.runMotor(MotionBitMotorChannel.M2, left, SPEED)
-    motionbit.runMotor(MotionBitMotorChannel.M3, right, SPEED)
-    motionbit.runMotor(MotionBitMotorChannel.M4, right, SPEED)
+function driveSides(left: MotionBitMotorDirection, right: MotionBitMotorDirection, leftSpeed: number, rightSpeed: number) {
+    motionbit.runMotor(MotionBitMotorChannel.M1, left, leftSpeed)
+    motionbit.runMotor(MotionBitMotorChannel.M2, left, leftSpeed)
+    motionbit.runMotor(MotionBitMotorChannel.M3, right, rightSpeed)
+    motionbit.runMotor(MotionBitMotorChannel.M4, right, rightSpeed)
 }
 
 function opposite(dir: MotionBitMotorDirection): MotionBitMotorDirection {
@@ -82,8 +85,8 @@ function opposite(dir: MotionBitMotorDirection): MotionBitMotorDirection {
 
 function pivot(ms: number) {
     if (stopped || ms == 0) return
-    if (ms > 0) driveSides(LEFT, opposite(RIGHT))
-    else driveSides(opposite(LEFT), RIGHT)
+    if (ms > 0) driveSides(LEFT, opposite(RIGHT), SPEED, SPEED)
+    else driveSides(opposite(LEFT), RIGHT, SPEED, SPEED)
     let end = input.runningTime() + Math.abs(ms)
     while (!stopped && input.runningTime() < end) basic.pause(10)
     stopWheels()
@@ -91,13 +94,31 @@ function pivot(ms: number) {
 
 function driveTo(color: number): boolean {
     if (stopped) return false
-    driveSides(LEFT, RIGHT)
     let start = input.runningTime()
+    let lastSeen = start
     let hits = 0
     while (!stopped && input.runningTime() - start < SEARCH_MS) {
         if (floorColor() == color) hits++
         else hits = 0
         if (hits >= 2) break
+        let correction = 0
+        if (FOLLOW_LINE) {
+            let weight = 0
+            let count = 0
+            for (let i = 0; i < LINE_PINS.length; i++) {
+                if (pins.digitalReadPin(LINE_PINS[i]) == BLACK_LEVEL) {
+                    weight += i - 2
+                    count++
+                }
+            }
+            if (count > 0) {
+                lastSeen = input.runningTime()
+                correction = Math.round(SPEED * 0.4 * weight / count)
+            } else if (input.runningTime() - lastSeen >= 300 && hits == 0) {
+                break
+            }
+        }
+        driveSides(LEFT, RIGHT, SPEED + Math.min(0, correction), SPEED - Math.max(0, correction))
         basic.pause(55)
     }
     stopWheels()
