@@ -1,12 +1,17 @@
 # หุ่นคีบกระป๋อง · MOTION:BIT Pro
 # เริ่มอ่านที่ run_route() เพื่อดูลำดับงาน หรือแก้ค่ามุม ระยะ และกำลังล้อที่ต้นไฟล์
 
+# S1 ยก–ลดราง และ S2 หมุนที่คีบขวา เป็นเซอร์โว 360° ค่า 90 คือหยุด ค่าที่ต่างจาก 90 กำหนดทิศและความเร็ว
 RACK_DOWN_COMMAND = 75
+# เวลาลดรางเป็นมิลลิวินาที ตั้งเป็น 0 เพื่อข้ามการลดจนกว่าจะจูนระยะจริง
 RACK_DOWN_MS = 0
 ROTATE_RIGHT_COMMAND = 105
+# เวลาหมุน S2 หลังหนีบ ตั้งเป็น 0 เพื่อค้างท่าเดิม
 ROTATE_RIGHT_MS = 0
+# S4 ขวาและ S5 ซ้ายเป็นเซอร์โว 180° ตัวเลขด้านล่างคือมุมปากคีบแต่ละข้าง
 GRIP_RIGHT_OPEN = 10
 GRIP_LEFT_OPEN = 20
+# ใส่มุมหนีบที่วัดได้ของแต่ละข้างตรงนี้ ตอนนี้ตั้งเท่ามุมเปิดจึงยังไม่หุบ
 GRIP_RIGHT_CLOSED = GRIP_RIGHT_OPEN
 GRIP_LEFT_CLOSED = GRIP_LEFT_OPEN
 SPEED = 255  # กำลังล้อพื้นฐาน 0–255 ค่า 255 ใช้ตอนออกตัว ถอย และหมุน
@@ -26,6 +31,7 @@ stopped = False
 def stop_wheels():
     motionbit.brake_motor(MotionBitMotorChannel.ALL)
 
+# กด B ระหว่างทำงานเพื่อยกเลิกรอบ เบรกล้อ และหยุด S1/S2 ส่วน S4/S5 ค้างมุมล่าสุด
 def on_button_pressed_b():
     global stopped
     stopped = True
@@ -34,6 +40,7 @@ def on_button_pressed_b():
     motionbit.set_servo_position(MotionBitServoChannel.S2, 90)
 input.on_button_pressed(Button.B, on_button_pressed_b)
 
+# ส่งคำสั่งตั้งค่า TCS3472 ผ่าน I²C โดยส่งหมายเลขรีจิสเตอร์และค่าที่จะเขียนเป็นคู่
 def write_register(reg: number, value: number):
     data = bytearray(2)
     data[0] = 0x80 | reg
@@ -41,6 +48,7 @@ def write_register(reg: number, value: number):
     pins.i2c_write_buffer(address, data)
 
 
+# ลองที่อยู่ I²C ทั้งสองแบบของ TCS3472 ถ้าพบชิปจึงเปิดอ่านสี ถ้าไม่พบ หุ่นยังค้นหากระป๋องได้
 def sensor_ready():
     global address
     for addr in [0x29, 0x39]:
@@ -86,12 +94,14 @@ def drive_sides(left: MotionBitMotorDirection, right: MotionBitMotorDirection, t
     motionbit.run_motor(MotionBitMotorChannel.M4, right, right_speed)
 
 
+# กลับทิศจากท่าเดินหน้าของล้อแต่ละฝั่ง ใช้ตอนถอยและหมุนอยู่กับที่
 def opposite(direction: MotionBitMotorDirection):
     if direction == MotionBitMotorDirection.FORWARD:
         return MotionBitMotorDirection.BACKWARD
     return MotionBitMotorDirection.FORWARD
 
 
+# เก็บหัวอ่าน NB142 ทั้ง 5 ช่องในเลขเดียว บิต 0 คือซ้ายสุด บิต 4 คือขวาสุด ค่า 31 คือติดครบ และ 0 คือดับหมด
 def nb142_mask():
     mask = 0
     for i in range(len(NB142_PINS)):
@@ -111,10 +121,12 @@ def alignment_direction(mask: number, previous: number):
     return 1 if balance > 0 else -1
 
 
+# หามุมต่างทางสั้นที่สุด เช่น จากทิศ 359° ไป 1° ต้องหมุนขวาเพียง 2°
 def heading_error(target: number, heading: number):
     return (target - heading + 540) % 360 - 180
 
 
+# ส่งพัลส์ 10 ไมโครวินาทีที่ TRIG (P0) แล้วจับเวลา ECHO (P1) เสียงไป–กลับประมาณ 58 ไมโครวินาทีต่อระยะ 1 ซม.
 def object_in_reach():
     pins.digital_write_pin(DigitalPin.P0, 0)
     control.wait_micros(2)
@@ -125,6 +137,7 @@ def object_in_reach():
     return echo_us > 0 and echo_us <= PICKUP_DISTANCE_CM * 58
 
 
+# วนค้นหาจนยืนยันระยะวัตถุ กด B หรือเจอข้อผิดพลาด ทิศตอนเริ่มเป็นทิศที่ใช้วิ่งตรง
 def search_for_can(read_colors: bool):
     target = input.compass_heading()
     if target < 0 or target >= 360:
@@ -142,12 +155,14 @@ def search_for_can(read_colors: bool):
     while not stopped:
         mask = nb142_mask()
         near = False
+        # วัดระยะเมื่อหัวอ่านติดครบ เว้นการยิงเสียงอย่างน้อย 65 มิลลิวินาที แล้วอ่านกรอบซ้ำก่อนสั่งล้อ
         if mask == 31 and input.running_time() >= next_ping:
             near = object_in_reach()
             next_ping = input.running_time() + 65
             mask = nb142_mask()
         if stopped:
             return False
+        # ดับ 1–4 ช่อง ให้หยุดเดินหน้าหรือเลิกเลี้ยว 90° แล้วหมุนกลับเข้าหาฝั่งที่ยังติด จำกัดเวลาแก้แนว 5 วินาที
         if mask != 0 and mask != 31:
             if not aligning:
                 stop_wheels()
@@ -168,6 +183,7 @@ def search_for_can(read_colors: bool):
             near_last_sample = False
             basic.pause(10)
             continue
+        # เมื่อพ้นช่วงแก้แนวให้เบรก ถ้าติดครบแล้วให้จำทิศปัจจุบันเป็นแนวเดินหน้าใหม่
         if aligning:
             stop_wheels()
             aligning = False
@@ -176,6 +192,7 @@ def search_for_can(read_colors: bool):
                 target = input.compass_heading()
                 if target < 0 or target >= 360 or stopped:
                     return False
+        # ดับทั้ง 5 ช่อง ให้ถอยตามเวลาที่จูนไว้ แล้วตั้งเป้าเลี้ยวขวาจากทิศก่อนถอย
         if mask == 0 and not turning:
             stop_wheels()
             turn_entry = input.compass_heading()
@@ -193,6 +210,7 @@ def search_for_can(read_colors: bool):
             turn_started = input.running_time()
             near_last_sample = False
             continue
+        # เห็นวัตถุใกล้ครั้งแรกให้เบรก ถ้ายังใกล้ในการวัดซ้ำจึงจบการค้นหาและเริ่มลำดับคีบ
         if mask == 31 and near:
             stop_wheels()
             wheels_moving = False
@@ -202,6 +220,7 @@ def search_for_can(read_colors: bool):
             basic.pause(65)
             continue
         near_last_sample = False
+        # ส่ง RED หรือ BLUE ทาง Serial เมื่อเข้าสู่แถบสีนั้น สีใช้บอกตำแหน่ง ส่วน HC-SR04 ใช้ตัดสินใจคีบ
         if read_colors:
             color = floor_color()
             if color != previous_color:
@@ -216,6 +235,7 @@ def search_for_can(read_colors: bool):
         if turning and input.running_time() - turn_started >= 5000:
             return False
         if not turning:
+            # ยอมให้รถเบน 2° ก่อนผ่อนล้อ ค่อย ๆ เปลี่ยนส่วนต่างกำลังครั้งละไม่เกิน 16 เพื่อลดการส่าย
             if wheels_moving:
                 error = heading_error(target, heading)
                 amount = min(80, 3 * max(0, abs(error) - 2))
@@ -226,6 +246,7 @@ def search_for_can(read_colors: bool):
                 wheels_moving = True
             drive_sides(LEFT, RIGHT, trim)
         elif heading_error(heading, turn_entry) < TURN_DEG - TURN_TOLERANCE_DEG:
+            # หมุนขวาอยู่กับที่โดยให้ล้อซ้ายเดินหน้าและล้อขวาถอย ตรวจมุมซ้ำระหว่างหมุน
             if not wheels_moving:
                 drive_sides(LEFT, opposite(RIGHT))
                 wheels_moving = True
@@ -239,6 +260,7 @@ def search_for_can(read_colors: bool):
     return False
 
 
+# ขับเซอร์โว 360° ตามเวลาที่กำหนดแล้วส่งค่า 90 เพื่อหยุด ถ้าเวลาเป็น 0 ให้ข้ามขั้นตอนนี้
 def run_timed_servo(channel: MotionBitServoChannel, command: number, duration: number):
     if stopped or duration <= 0:
         return
@@ -247,11 +269,13 @@ def run_timed_servo(channel: MotionBitServoChannel, command: number, duration: n
     motionbit.set_servo_position(channel, 90)
 
 
+# ตั้งมุมปากคีบขวา S4 และซ้าย S5 แยกกันตามค่าที่จูนกับก้านคีบจริง
 def set_grip(right: number, left: number):
     motionbit.set_servo_position(MotionBitServoChannel.S4, right)
     motionbit.set_servo_position(MotionBitServoChannel.S5, left)
 
 
+# งานหนึ่งรอบ อ้าปากคีบ → ค้นหาวัตถุ → เบรกล้อ → ลดราง S1 → หนีบ S4/S5 → หมุนที่คีบขวา S2
 def run_route():
     set_grip(GRIP_RIGHT_OPEN, GRIP_LEFT_OPEN)
     found = search_for_can(sensor_ready())
@@ -262,11 +286,13 @@ def run_route():
     if stopped:
         return False
     set_grip(GRIP_RIGHT_CLOSED, GRIP_LEFT_CLOSED)
+    # รอปากคีบเคลื่อนเข้าตำแหน่งก่อนสั่ง S2 หมุน
     basic.pause(550)
     run_timed_servo(MotionBitServoChannel.S2, ROTATE_RIGHT_COMMAND, ROTATE_RIGHT_MS)
     return not stopped
 
 
+# กด A เพื่อเริ่มหนึ่งรอบ ตัวแปร busy กันการกดซ้ำ จอ ✓ เมื่อจบลำดับ หรือ ✗ เมื่อหยุดก่อนจบ
 def on_button_pressed_a():
     global busy, stopped
     if busy:
@@ -282,6 +308,7 @@ def on_button_pressed_a():
     busy = False
 input.on_button_pressed(Button.A, on_button_pressed_a)
 
+# เปิดเครื่องแล้ว เบรกล้อ แสดง ✓ หยุด S2 และตั้งปากคีบขวา 10° ซ้าย 20° รอ 1 วินาทีก่อนเตรียมเข็มทิศ
 stop_wheels()
 basic.show_icon(IconNames.YES)
 motionbit.set_servo_position(MotionBitServoChannel.S2, 90)

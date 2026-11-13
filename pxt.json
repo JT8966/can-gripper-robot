@@ -5,6 +5,6 @@
         "core": "*",
         "pxt-motionbit": "github:CytronTechnologies/pxt-motionbit#v1.2.0"
     },
-    "files": ["main.ts"],
-    "preferredEditor": "tsprj"
+    "files": ["main.py"],
+    "preferredEditor": "pyprj"
 }
