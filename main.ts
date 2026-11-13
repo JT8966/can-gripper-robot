@@ -95,11 +95,22 @@ function opposite(dir: MotionBitMotorDirection): MotionBitMotorDirection {
     return MotionBitMotorDirection.Forward
 }
 
-function nb142Detected(): boolean {
+function nb142Mask(): number {
+    let mask = 0
     for (let i = 0; i < NB142_PINS.length; i++) {
-        if (pins.digitalReadPin(NB142_PINS[i]) == NB142_DETECTED_LEVEL) return true
+        if (pins.digitalReadPin(NB142_PINS[i]) == NB142_DETECTED_LEVEL) mask |= 1 << i
     }
-    return false
+    return mask
+}
+
+// หันเข้าหาฝั่งที่ยังติด ถ้าสองฝั่งสมดุลให้คงทิศแก้ล่าสุด
+function alignmentDirection(mask: number, previous: number): number {
+    let balance = 0
+    for (let i = 0; i < NB142_PINS.length; i++) {
+        if ((mask & (1 << i)) != 0) balance += i - 2
+    }
+    if (balance == 0) return previous
+    return balance > 0 ? 1 : -1
 }
 
 function headingError(target: number, heading: number): number {
@@ -127,16 +138,47 @@ function searchForCan(readColors: boolean): boolean {
     let nearLastSample = false
     let trim = 0
     let wheelsMoving = false
+    let aligning = false
+    let direction = 1
     while (!stopped) {
-        let detected = nb142Detected()
+        let mask = nb142Mask()
         let near = false
-        if (detected && input.runningTime() >= nextPing) {
+        if (mask == 31 && input.runningTime() >= nextPing) {
             near = objectInReach()
             nextPing = input.runningTime() + 65
-            detected = nb142Detected()
+            mask = nb142Mask()
         }
         if (stopped) return false
-        if (!detected && !turning) {
+        if (mask != 0 && mask != 31) {
+            if (!aligning) {
+                stopWheels()
+                turnStarted = input.runningTime()
+                turning = false
+                aligning = true
+                wheelsMoving = false
+            }
+            if (input.runningTime() - turnStarted >= 5000) return false
+            let next = alignmentDirection(mask, direction)
+            if (!wheelsMoving || next != direction) {
+                if (next > 0) driveSides(LEFT, opposite(RIGHT))
+                else driveSides(opposite(LEFT), RIGHT)
+                direction = next
+                wheelsMoving = true
+            }
+            nearLastSample = false
+            basic.pause(10)
+            continue
+        }
+        if (aligning) {
+            stopWheels()
+            aligning = false
+            wheelsMoving = false
+            if (mask == 31) {
+                target = input.compassHeading()
+                if (target < 0 || target >= 360 || stopped) return false
+            }
+        }
+        if (mask == 0 && !turning) {
             stopWheels()
             turnEntry = input.compassHeading()
             if (turnEntry < 0 || turnEntry >= 360 || stopped) return false
@@ -146,12 +188,13 @@ function searchForCan(readColors: boolean): boolean {
             if (stopped) return false
             target = (turnEntry + TURN_DEG) % 360
             turning = true
+            direction = 1
             wheelsMoving = false
             turnStarted = input.runningTime()
             nearLastSample = false
             continue
         }
-        if (detected && near) {
+        if (mask == 31 && near) {
             stopWheels()
             wheelsMoving = false
             if (nearLastSample) return true

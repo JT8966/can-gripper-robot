@@ -27,7 +27,7 @@ function simulate(cancelWhileReversing, driftDegrees = 15, turnStep = 15) {
             onButtonPressed:(b,fn)=>{buttons[b]=fn}},
         control: {waitMicros(){}},
         pins: {
-            digitalReadPin:p=>Number(p===14 && detected),
+            digitalReadPin:()=>Number(detected),
             digitalWritePin(p){assert.equal(p,0)},
             i2cWriteNumber(){}, i2cReadNumber:()=>0,
             pulseIn(p) {
@@ -126,3 +126,59 @@ assert.deepEqual(cancelled.reversals,[50])
 assert.equal(cancelled.servos.length,5)
 assert.equal(cancelled.icon,0)
 console.log('Continuous search, two boundary turns, sonar pickup and B stop passed.')
+
+// Drive the actual button handler through a partial mask; no forward command is
+// allowed until all five inputs recover. Also exercise interruption of a 90° turn.
+function simulateAlignment(initialMask, expectedDirection, duringTurn = false, action = 'recover') {
+    let mask = duringTurn ? 0 : initialMask
+    let ms = 0, aligned = false, finished = false, icon
+    const buttons = {}, wheels = [0, 0, 0, 0, 0]
+    const ctx = {
+        DigitalPin:{P0:0,P1:1,P12:12,P13:13,P14:14,P15:15,P16:16},
+        MotionBitMotorDirection:{Forward:1,Backward:-1},
+        MotionBitMotorChannel:{M1:1,M2:2,M3:3,M4:4,All:0},
+        MotionBitServoChannel:{S1:1,S2:2,S3:3,S4:4,S5:5},
+        Button:{A:'A',B:'B'}, IconNames:{Yes:1,No:0}, PulseValue:{High:1},
+        NumberFormat:{UInt8LE:0},
+        input:{onButtonPressed:(b,f)=>buttons[b]=f, runningTime:()=>ms, compassHeading:()=>350},
+        pins:{digitalReadPin:p=>(mask >> (p-12)) & 1, digitalWritePin(){},
+            i2cWriteNumber(){}, i2cReadNumber:()=>0, pulseIn:()=>finished ? 580 : 5800},
+        control:{waitMicros(){}},
+        motionbit:{
+            brakeMotor:()=>wheels.fill(0),
+            runMotor(m,d){if(m===0) wheels.fill(d); else wheels[m]=d},
+            setServoPosition(){assert.equal(wheels[1],0)}
+        },
+        basic:{showString(){},clearScreen(){},showIcon:i=>icon=i,
+            pause(n){
+                ms+=n
+                assert(ms<9000)
+                if(wheels[1]===0) return
+                if(mask===0) {
+                    if(wheels[1]===1 && wheels[3]===-1) mask=initialMask
+                } else if(mask!==31) {
+                    assert.equal(wheels[1],expectedDirection)
+                    assert.equal(wheels[3],-expectedDirection)
+                    aligned=true
+                    if(action==='recover') mask=31
+                    if(action==='cancel') buttons.B()
+                } else {
+                    assert.equal(wheels[1],1)
+                    assert.equal(wheels[3],1)
+                    finished=true
+                }
+            }}
+    }
+    vm.runInNewContext(source,ctx)
+    buttons.A()
+    assert(aligned)
+    assert.equal(finished,action==='recover')
+    assert.equal(icon,action==='recover' ? 1 : 0)
+    assert.equal(wheels[1],0)
+    assert.equal(wheels[3],0)
+}
+for(let i=0;i<5;i++) simulateAlignment(31 ^ (1<<i),i<=2 ? 1 : -1)
+simulateAlignment(7,-1,true)
+simulateAlignment(28,1,false,'timeout')
+simulateAlignment(28,1,false,'cancel')
+console.log('Each missing channel, interrupted turn, alignment timeout and B stop passed.')

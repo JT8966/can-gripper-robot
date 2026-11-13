@@ -92,11 +92,23 @@ def opposite(direction: MotionBitMotorDirection):
     return MotionBitMotorDirection.FORWARD
 
 
-def nb142_detected():
+def nb142_mask():
+    mask = 0
     for i in range(len(NB142_PINS)):
         if pins.digital_read_pin(NB142_PINS[i]) == NB142_DETECTED_LEVEL:
-            return True
-    return False
+            mask |= 1 << i
+    return mask
+
+
+# หันเข้าหาฝั่งที่ยังติด ถ้าสองฝั่งสมดุลให้คงทิศแก้ล่าสุด
+def alignment_direction(mask: number, previous: number):
+    balance = 0
+    for i in range(len(NB142_PINS)):
+        if (mask & (1 << i)) != 0:
+            balance += i - 2
+    if balance == 0:
+        return previous
+    return 1 if balance > 0 else -1
 
 
 def heading_error(target: number, heading: number):
@@ -125,16 +137,46 @@ def search_for_can(read_colors: bool):
     near_last_sample = False
     trim = 0
     wheels_moving = False
+    aligning = False
+    direction = 1
     while not stopped:
-        detected = nb142_detected()
+        mask = nb142_mask()
         near = False
-        if detected and input.running_time() >= next_ping:
+        if mask == 31 and input.running_time() >= next_ping:
             near = object_in_reach()
             next_ping = input.running_time() + 65
-            detected = nb142_detected()
+            mask = nb142_mask()
         if stopped:
             return False
-        if not detected and not turning:
+        if mask != 0 and mask != 31:
+            if not aligning:
+                stop_wheels()
+                turn_started = input.running_time()
+                turning = False
+                aligning = True
+                wheels_moving = False
+            if input.running_time() - turn_started >= 5000:
+                return False
+            next_direction = alignment_direction(mask, direction)
+            if not wheels_moving or next_direction != direction:
+                if next_direction > 0:
+                    drive_sides(LEFT, opposite(RIGHT))
+                else:
+                    drive_sides(opposite(LEFT), RIGHT)
+                direction = next_direction
+                wheels_moving = True
+            near_last_sample = False
+            basic.pause(10)
+            continue
+        if aligning:
+            stop_wheels()
+            aligning = False
+            wheels_moving = False
+            if mask == 31:
+                target = input.compass_heading()
+                if target < 0 or target >= 360 or stopped:
+                    return False
+        if mask == 0 and not turning:
             stop_wheels()
             turn_entry = input.compass_heading()
             if turn_entry < 0 or turn_entry >= 360 or stopped:
@@ -146,11 +188,12 @@ def search_for_can(read_colors: bool):
                 return False
             target = (turn_entry + TURN_DEG) % 360
             turning = True
+            direction = 1
             wheels_moving = False
             turn_started = input.running_time()
             near_last_sample = False
             continue
-        if detected and near:
+        if mask == 31 and near:
             stop_wheels()
             wheels_moving = False
             if near_last_sample:
