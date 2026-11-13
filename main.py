@@ -5,6 +5,8 @@
 RACK_DOWN_COMMAND = 75
 # เวลาลดรางเป็นมิลลิวินาที ตั้งเป็น 0 เพื่อข้ามการลดจนกว่าจะจูนระยะจริง
 RACK_DOWN_MS = 0
+RACK_UP_COMMAND = 105
+RACK_UP_MS = 0  # จูนเวลายกกระป๋องขึ้นก่อนออกเดิน และยกรางกลับหลังวาง
 ROTATE_RIGHT_COMMAND = 105
 # เวลาหมุน S2 หลังหนีบ ตั้งเป็น 0 เพื่อค้างท่าเดิม
 ROTATE_RIGHT_MS = 0
@@ -26,6 +28,9 @@ TURN_TOLERANCE_DEG = 4  # เผื่อมุมรถไหล 4° สั่�
 address = 0x29
 busy = True
 stopped = False
+carrying_color = 0  # เก็บสีไว้จนกว่าจะปล่อย แม้หยุดด้วย B ระหว่างขน
+left_pickup = False
+transport_ready = False  # ถ้ายกหรือลดค้างเมื่อกด B ให้จัดรางด้วยมือก่อนรีเซ็ต
 
 
 def stop_wheels():
@@ -48,7 +53,7 @@ def write_register(reg: number, value: number):
     pins.i2c_write_buffer(address, data)
 
 
-# ลองที่อยู่ I²C ทั้งสองแบบของ TCS3472 ถ้าพบชิปจึงเปิดอ่านสี ถ้าไม่พบ หุ่นยังค้นหากระป๋องได้
+# ต้องพบ TCS3472 เพื่อจำสีพื้นตอนรับและตรวจสีตอนวาง
 def sensor_ready():
     global address
     for addr in [0x29, 0x39]:
@@ -66,7 +71,13 @@ def sensor_ready():
     return False
 
 
-def floor_color():  # จำแนกพื้นเป็น 0 พื้นทั่วไป 1 แดง หรือ 2 น้ำเงิน
+RED = 1
+BLUE = 2
+GREEN = 3
+YELLOW = 4
+
+
+def floor_color():
     pins.i2c_write_number(address, 0xb4, NumberFormat.UINT8_LE, True)
     data = pins.i2c_read_buffer(address, 8)
     clear = data.get_number(NumberFormat.UINT16_LE, 0)
@@ -74,11 +85,16 @@ def floor_color():  # จำแนกพื้นเป็น 0 พื้นท�
     green = data.get_number(NumberFormat.UINT16_LE, 4)
     blue = data.get_number(NumberFormat.UINT16_LE, 6)
     if clear < 30:
-        return 0
+        return -1  # มืดเกินไป ยังใช้ยืนยันการพ้นแถบต้นทางไม่ได้
+    # เหลืองมีทั้งแดงและเขียวสูงกว่าน้ำเงิน เกณฑ์เหล่านี้ต้องลองกับเทปและแสงจริง
+    if min(red, green) > blue * 1.45 and max(red, green) <= min(red, green) * 1.35:
+        return YELLOW
     if red > green * 1.35 and red > blue * 1.35:
-        return 1
+        return RED
+    if green > red * 1.35 and green > blue * 1.35:
+        return GREEN
     if blue > green * 1.2 and blue > red * 1.35:
-        return 2
+        return BLUE
     return 0
 
 
@@ -137,17 +153,19 @@ def object_in_reach():
     return echo_us > 0 and echo_us <= PICKUP_DISTANCE_CM * 58
 
 
-# วนค้นหาจนยืนยันระยะวัตถุ กด B หรือเจอข้อผิดพลาด ทิศตอนเริ่มเป็นทิศที่ใช้วิ่งตรง
-def search_for_can(read_colors: bool):
+# เมื่อขนกระป๋อง ให้ใช้สีพื้นตัดสินจุดหยุด เพราะกระป๋องในคีบอาจบัง HC-SR04
+def drive_to_station(delivering: bool):
+    global left_pickup
     target = input.compass_heading()
     if target < 0 or target >= 360:
-        return False
+        return 0
     turning = False
     turn_started = 0
     turn_entry = 0
     next_ping = 0
+    candidate = 0
+    off_since = -1
     previous_color = 0
-    near_last_sample = False
     trim = 0
     wheels_moving = False
     aligning = False
@@ -156,12 +174,12 @@ def search_for_can(read_colors: bool):
         mask = nb142_mask()
         near = False
         # วัดระยะเมื่อหัวอ่านติดครบ เว้นการยิงเสียงอย่างน้อย 65 มิลลิวินาที แล้วอ่านกรอบซ้ำก่อนสั่งล้อ
-        if mask == 31 and input.running_time() >= next_ping:
+        if not delivering and mask == 31 and input.running_time() >= next_ping:
             near = object_in_reach()
             next_ping = input.running_time() + 65
             mask = nb142_mask()
         if stopped:
-            return False
+            return 0
         # ดับ 1–4 ช่อง ให้หยุดเดินหน้าหรือเลิกเลี้ยว 90° แล้วหมุนกลับเข้าหาฝั่งที่ยังติด จำกัดเวลาแก้แนว 5 วินาที
         if mask != 0 and mask != 31:
             if not aligning:
@@ -171,7 +189,7 @@ def search_for_can(read_colors: bool):
                 aligning = True
                 wheels_moving = False
             if input.running_time() - turn_started >= 5000:
-                return False
+                return 0
             next_direction = alignment_direction(mask, direction)
             if not wheels_moving or next_direction != direction:
                 if next_direction > 0:
@@ -180,7 +198,8 @@ def search_for_can(read_colors: bool):
                     drive_sides(opposite(LEFT), RIGHT)
                 direction = next_direction
                 wheels_moving = True
-            near_last_sample = False
+            candidate = 0
+            off_since = -1
             basic.pause(10)
             continue
         # เมื่อพ้นช่วงแก้แนวให้เบรก ถ้าติดครบแล้วให้จำทิศปัจจุบันเป็นแนวเดินหน้าใหม่
@@ -191,49 +210,64 @@ def search_for_can(read_colors: bool):
             if mask == 31:
                 target = input.compass_heading()
                 if target < 0 or target >= 360 or stopped:
-                    return False
+                    return 0
         # ดับทั้ง 5 ช่อง ให้ถอยตามเวลาที่จูนไว้ แล้วตั้งเป้าเลี้ยวขวาจากทิศก่อนถอย
         if mask == 0 and not turning:
             stop_wheels()
             turn_entry = input.compass_heading()
             if turn_entry < 0 or turn_entry >= 360 or stopped:
-                return False
+                return 0
             drive_sides(opposite(LEFT), opposite(RIGHT))
             basic.pause(REVERSE_3CM_MS)
             stop_wheels()
             if stopped:
-                return False
+                return 0
             target = (turn_entry + TURN_DEG) % 360
             turning = True
             direction = 1
             wheels_moving = False
             turn_started = input.running_time()
-            near_last_sample = False
+            candidate = 0
+            off_since = -1
             continue
-        # เห็นวัตถุใกล้ครั้งแรกให้เบรก ถ้ายังใกล้ในการวัดซ้ำจึงจบการค้นหาและเริ่มลำดับคีบ
-        if mask == 31 and near:
+        color = floor_color() if mask == 31 else -1
+        if delivering and not left_pickup:
+            if color >= 0 and color != carrying_color:
+                if off_since < 0:
+                    off_since = input.running_time()
+                elif input.running_time() - off_since >= 65:
+                    left_pickup = True
+            else:
+                off_since = -1
+        if color != previous_color:
+            if color == RED:
+                serial.write_line("RED")
+            elif color == BLUE:
+                serial.write_line("BLUE")
+            elif color == YELLOW:
+                serial.write_line("YELLOW")
+            elif color == GREEN:
+                serial.write_line("GREEN")
+            previous_color = color
+        pickup = not delivering and near and mask == 31
+        drop = delivering and left_pickup and color == carrying_color
+        if pickup or drop:
             stop_wheels()
             wheels_moving = False
-            if near_last_sample:
-                return True
-            near_last_sample = True
+            # ยืนยันสีเดียวกันสองครั้งห่างอย่างน้อยหนึ่งรอบวัดแสง ก่อนอนุญาตให้ขยับแขน
+            if color != RED and color != YELLOW and color != GREEN:
+                return 0
+            if candidate == color and not stopped and nb142_mask() == 31:
+                return color
+            candidate = color
             basic.pause(65)
             continue
-        near_last_sample = False
-        # ส่ง RED หรือ BLUE ทาง Serial เมื่อเข้าสู่แถบสีนั้น สีใช้บอกตำแหน่ง ส่วน HC-SR04 ใช้ตัดสินใจคีบ
-        if read_colors:
-            color = floor_color()
-            if color != previous_color:
-                if color == 1:
-                    serial.write_line("RED")
-                if color == 2:
-                    serial.write_line("BLUE")
-                previous_color = color
+        candidate = 0
         heading = input.compass_heading()
         if heading < 0 or heading >= 360 or stopped:
-            return False
+            return 0
         if turning and input.running_time() - turn_started >= 5000:
-            return False
+            return 0
         if not turning:
             # ยอมให้รถเบน 2° ก่อนผ่อนล้อ ค่อย ๆ เปลี่ยนส่วนต่างกำลังครั้งละไม่เกิน 16 เพื่อลดการส่าย
             if wheels_moving:
@@ -257,7 +291,7 @@ def search_for_can(read_colors: bool):
             turning = False
             wheels_moving = False
         basic.pause(65)
-    return False
+    return 0
 
 
 # ขับเซอร์โว 360° ตามเวลาที่กำหนดแล้วส่งค่า 90 เพื่อหยุด ถ้าเวลาเป็น 0 ให้ข้ามขั้นตอนนี้
@@ -275,20 +309,43 @@ def set_grip(right: number, left: number):
     motionbit.set_servo_position(MotionBitServoChannel.S5, left)
 
 
-# งานหนึ่งรอบ อ้าปากคีบ → ค้นหาวัตถุ → เบรกล้อ → ลดราง S1 → หนีบ S4/S5 → หมุนที่คีบขวา S2
+# งานหนึ่งรอบ รับจากพื้นสีใด นำไปวางบนแถบสีเดียวกันอีกจุด
 def run_route():
-    set_grip(GRIP_RIGHT_OPEN, GRIP_LEFT_OPEN)
-    found = search_for_can(sensor_ready())
-    stop_wheels()
-    if not found or stopped:
+    global carrying_color, left_pickup, transport_ready
+    if carrying_color and not transport_ready:
         return False
+    if not sensor_ready() or stopped:
+        return False
+    if carrying_color == 0:
+        set_grip(GRIP_RIGHT_OPEN, GRIP_LEFT_OPEN)
+        picked = drive_to_station(False)
+        stop_wheels()
+        if not picked or stopped:
+            return False
+        run_timed_servo(MotionBitServoChannel.S1, RACK_DOWN_COMMAND, RACK_DOWN_MS)
+        if stopped:
+            return False
+        set_grip(GRIP_RIGHT_CLOSED, GRIP_LEFT_CLOSED)
+        carrying_color = picked
+        left_pickup = False
+        basic.pause(550)
+        run_timed_servo(MotionBitServoChannel.S2, ROTATE_RIGHT_COMMAND, ROTATE_RIGHT_MS)
+        run_timed_servo(MotionBitServoChannel.S1, RACK_UP_COMMAND, RACK_UP_MS)
+        transport_ready = not stopped
+    if stopped:
+        return False
+    arrived = drive_to_station(True)
+    stop_wheels()
+    if not arrived or stopped:
+        return False
+    transport_ready = False
     run_timed_servo(MotionBitServoChannel.S1, RACK_DOWN_COMMAND, RACK_DOWN_MS)
     if stopped:
         return False
-    set_grip(GRIP_RIGHT_CLOSED, GRIP_LEFT_CLOSED)
-    # รอปากคีบเคลื่อนเข้าตำแหน่งก่อนสั่ง S2 หมุน
+    set_grip(GRIP_RIGHT_OPEN, GRIP_LEFT_OPEN)
+    carrying_color = 0
     basic.pause(550)
-    run_timed_servo(MotionBitServoChannel.S2, ROTATE_RIGHT_COMMAND, ROTATE_RIGHT_MS)
+    run_timed_servo(MotionBitServoChannel.S1, RACK_UP_COMMAND, RACK_UP_MS)
     return not stopped
 
 
