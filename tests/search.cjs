@@ -13,6 +13,7 @@ function simulate(cancelWhileReversing, driftDegrees = 15, turnStep = 15) {
     const power = {}
     let pivotDegrees = 0, pivotStarts = 0
     let launchReadings = 0
+    let routeStarted = false
     const context = {
         DigitalPin: {P0:0, P1:1, P12:12, P13:13, P14:14, P15:15, P16:16},
         MotionBitMotorDirection: {Forward:1, Backward:-1},
@@ -21,7 +22,7 @@ function simulate(cancelWhileReversing, driftDegrees = 15, turnStep = 15) {
         Button: {A:'A', B:'B'}, IconNames: {Yes:1, No:0}, PulseValue: {High:1},
         NumberFormat: {UInt8LE:0},
         input: {runningTime:()=>ms, compassHeading() {
-                if(ms>0 && !drifted && ++launchReadings===2) return (heading+10)%360
+                if(routeStarted && !drifted && ++launchReadings===2) return (heading+10)%360
                 return heading
             },
             onButtonPressed:(b,fn)=>{buttons[b]=fn}},
@@ -105,6 +106,10 @@ function simulate(cancelWhileReversing, driftDegrees = 15, turnStep = 15) {
         }
     }
     vm.runInNewContext(source,context)
+    assert.deepEqual(servos,[[2,90],[4,10],[5,20]])
+    assert.equal(ms,1000)
+    assert.equal(icon,1)
+    routeStarted = true
     buttons.A()
     assert.equal(wheels[1],0)
     assert.equal(wheels[3],0)
@@ -118,12 +123,11 @@ assert(run.corrected)
 assert(simulate(false,-15).corrected)
 assert.deepEqual(run.turnHeadings,[80,170])
 assert.deepEqual(simulate(false,15,16).turnHeadings,[86,182])
-assert.deepEqual(run.servos.map(([pin])=>pin),[1,4,5,2,3,1,2,3,4,5])
-assert.deepEqual(run.servos.slice(5,8),[[1,55],[2,95],[3,85]])
+assert.deepEqual(run.servos,[[2,90],[4,10],[5,20],[4,10],[5,20],[4,10],[5,20]])
 assert.equal(run.icon,1)
 const cancelled=simulate(true)
 assert.deepEqual(cancelled.reversals,[50])
-assert.equal(cancelled.servos.length,5)
+assert.deepEqual(cancelled.servos.slice(-2),[[1,90],[2,90]])
 assert.equal(cancelled.icon,0)
 console.log('Continuous search, two boundary turns, sonar pickup and B stop passed.')
 

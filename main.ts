@@ -1,16 +1,14 @@
 // หุ่นคีบกระป๋อง · MOTION:BIT Pro
 // เริ่มอ่านที่ runRoute() เพื่อดูลำดับงาน หรือแก้ค่ามุม ระยะ และกำลังล้อที่ต้นไฟล์
 
-const RACK_UP = 85  // ปรับมุม S1 ตอนยกชุดคีบ (องศา) ลองกับรางจริงก่อนแขวนกระป๋อง
-const RACK_DOWN = 55  // ปรับมุม S1 ตอนลดชุดคีบให้ปากคีบอยู่ระดับเดียวกับกระป๋อง
-const ROTATE_LEFT_READY = 90  // มุมเตรียมของเซอร์โวหมุนชุดคีบด้านซ้าย S4
-const ROTATE_RIGHT_READY = 90  // มุมเตรียมของเซอร์โวหมุนชุดคีบด้านขวา S5
-const ROTATE_LEFT_AFTER_GRIP = 90  // ปรับตรงนี้ถ้าต้องการให้ S4 หมุนหลังหนีบ ตอนนี้เท่ากับมุมเตรียม
-const ROTATE_RIGHT_AFTER_GRIP = 90  // ปรับมุม S5 หลังหนีบให้สอดคล้องกับ S4 และทิศติดตั้งจริง
-const GRIP_LEFT_OPEN = 65  // มุมอ้าของปากคีบซ้าย S2
-const GRIP_RIGHT_OPEN = 115  // มุมอ้าของปากคีบขวา S3
-const GRIP_LEFT_CLOSED = 95  // มุมหุบของ S2 ปรับให้จับกระป๋องได้พอดี
-const GRIP_RIGHT_CLOSED = 85  // มุมหุบของ S3 ปรับแยกจาก S2 ตามตำแหน่งก้าน
+const RACK_DOWN_COMMAND = 75
+const RACK_DOWN_MS = 0
+const ROTATE_RIGHT_COMMAND = 105
+const ROTATE_RIGHT_MS = 0
+const GRIP_RIGHT_OPEN = 10
+const GRIP_LEFT_OPEN = 20
+const GRIP_RIGHT_CLOSED = GRIP_RIGHT_OPEN
+const GRIP_LEFT_CLOSED = GRIP_LEFT_OPEN
 const SPEED = 255  // กำลังล้อพื้นฐาน 0–255 ค่า 255 ใช้ตอนออกตัว ถอย และหมุน
 const LEFT = MotionBitMotorDirection.Forward  // ทิศเดินหน้าของล้อซ้าย M1/M2 กลับค่านี้ถ้าทั้งฝั่งหมุนย้อน
 const RIGHT = MotionBitMotorDirection.Forward  // ทิศเดินหน้าของล้อขวา M3/M4 กลับค่านี้ถ้าทั้งฝั่งหมุนย้อน
@@ -37,6 +35,8 @@ function stopWheels() {
 input.onButtonPressed(Button.B, function () {
     stopped = true
     stopWheels()
+    motionbit.setServoPosition(MotionBitServoChannel.S1, 90)
+    motionbit.setServoPosition(MotionBitServoChannel.S2, 90)
 })
 
 function writeRegister(reg: number, value: number) {
@@ -242,37 +242,28 @@ function searchForCan(readColors: boolean): boolean {
     return false
 }
 
-function moveRack(angle: number) {
-    if (stopped) return
-    motionbit.setServoPosition(MotionBitServoChannel.S1, angle)
-    basic.pause(550)  // เผื่อให้รางเคลื่อนถึงตำแหน่ง 550 มิลลิวินาที
+function runTimedServo(channel: MotionBitServoChannel, command: number, duration: number) {
+    if (stopped || duration <= 0) return
+    motionbit.setServoPosition(channel, command)
+    basic.pause(duration)
+    motionbit.setServoPosition(channel, 90)
 }
 
-function rotateGrip(afterGrip: boolean) {
-    if (stopped) return
-    motionbit.setServoPosition(MotionBitServoChannel.S4, afterGrip ? ROTATE_LEFT_AFTER_GRIP : ROTATE_LEFT_READY)
-    motionbit.setServoPosition(MotionBitServoChannel.S5, afterGrip ? ROTATE_RIGHT_AFTER_GRIP : ROTATE_RIGHT_READY)
-    basic.pause(550)  // รอให้คู่หมุนเคลื่อนถึงมุมก่อนทำขั้นต่อไป
+function setGrip(right: number, left: number) {
+    motionbit.setServoPosition(MotionBitServoChannel.S4, right)
+    motionbit.setServoPosition(MotionBitServoChannel.S5, left)
 }
 
-function moveGrip(close: boolean) {
-    if (stopped) return
-    motionbit.setServoPosition(MotionBitServoChannel.S2, close ? GRIP_LEFT_CLOSED : GRIP_LEFT_OPEN)
-    motionbit.setServoPosition(MotionBitServoChannel.S3, close ? GRIP_RIGHT_CLOSED : GRIP_RIGHT_OPEN)
-    basic.pause(550)  // รอให้ปากคีบทั้งคู่ไปถึงตำแหน่ง 550 มิลลิวินาที
-}
-
-function runRoute(): boolean {  // ลำดับงานหนึ่งรอบ แก้ตรงนี้หากต้องการสลับขั้นตอนของแขน
-    let readColors = sensorReady()
-    moveRack(RACK_UP)  // ยกรางขึ้นเพื่อเตรียมวิ่ง
-    rotateGrip(false)  // จัดคู่หมุน S4/S5 ไว้ที่มุมเตรียม
-    moveGrip(false)  // อ้าปากคีบ S2/S3 ก่อนค้นหา
-    let found = searchForCan(readColors)
+function runRoute(): boolean {
+    setGrip(GRIP_RIGHT_OPEN, GRIP_LEFT_OPEN)
+    let found = searchForCan(sensorReady())
     stopWheels()
     if (!found || stopped) return false
-    moveRack(RACK_DOWN)  // ลดราง S1 ให้ปากคีบอยู่ระดับกระป๋อง
-    moveGrip(true)  // หุบ S2/S3 พร้อมกันเพื่อจับกระป๋อง
-    rotateGrip(true)  // สั่ง S4/S5 ไปมุมหลังหนีบ ปัจจุบันเท่าท่าเตรียมจึงค้างที่ 90°
+    runTimedServo(MotionBitServoChannel.S1, RACK_DOWN_COMMAND, RACK_DOWN_MS)
+    if (stopped) return false
+    setGrip(GRIP_RIGHT_CLOSED, GRIP_LEFT_CLOSED)
+    basic.pause(550)
+    runTimedServo(MotionBitServoChannel.S2, ROTATE_RIGHT_COMMAND, ROTATE_RIGHT_MS)
     return !stopped
 }
 
@@ -288,6 +279,10 @@ input.onButtonPressed(Button.A, function () {
 })
 
 stopWheels()
+basic.showIcon(IconNames.Yes)
+motionbit.setServoPosition(MotionBitServoChannel.S2, 90)
+setGrip(GRIP_RIGHT_OPEN, GRIP_LEFT_OPEN)
+basic.pause(1000)
 input.compassHeading()  // เรียกเข็มทิศขณะรถจอด เพื่อให้ปรับเทียบก่อนเริ่มถ้าบอร์ดร้องขอ
 busy = false
 basic.showString("A")
