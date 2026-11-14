@@ -21,13 +21,12 @@ NB142_DETECTED_LEVEL = 1  # ระดับสัญญาณเมื่อ NB1
 NB142_PINS = [DigitalPin.P12, DigitalPin.P13, DigitalPin.P14, DigitalPin.P15, DigitalPin.P16]  # พินของหัวอ่าน NB142 เรียงซ้ายไปขวาตามทิศเดินหน้าของรถ
 TURN_DEG = 90  # มุมหมุนขวาเมื่อ NB142 หลุดกรอบ
 TURN_TOLERANCE_DEG = 4  # เผื่อมุมรถไหล 4° สั่งเบรกที่ 86° สำหรับเป้าหมาย 90° เพิ่มค่านี้เพื่อเบรกเร็วขึ้น
-MUX_ADDRESS = 0x70  # PCA9548A เมื่อ A0/A1/A2 เป็น 0
-COLOR_ADDRESS = 0x29  # TCS34725 ทั้งสองตัวใช้ที่อยู่เดียวกัน
+COLOR_ADDRESS = 0x29  # TCS34725 เซ็นเซอร์สีข้างขวา (ต่อตรง I2C ไม่ผ่าน PCA9548A)
 busy = True
 stopped = False
-right_can_color = 0  # ช่อง 0 อ่านกระป๋องในวงขวา S3
-left_can_color = 0  # ช่อง 1 อ่านกระป๋องในวงซ้าย S2
+right_can_color = 0  # อ่านกระป๋องในวงขวา S3
 arm_cycle_incomplete = False  # ถ้าหยุดกลางลำดับแขน ต้องจัดกลไกกลับท่าเริ่มแล้วรีเซ็ต
+color_sensor_ready = False
 
 
 def stop_wheels():
@@ -41,12 +40,6 @@ def on_button_pressed_b():
     motionbit.set_servo_position(MotionBitServoChannel.S1, 90)
 input.on_button_pressed(Button.B, on_button_pressed_b)
 
-# เลือกทีละช่องและจบด้วย STOP เพื่อให้ PCA9548A ต่อช่องนั้นเข้าบัส
-def select_color_channel(channel: number):
-    mask = 1 << channel
-    pins.i2c_write_number(MUX_ADDRESS, mask, NumberFormat.UINT8_LE, False)
-    return pins.i2c_read_number(MUX_ADDRESS, NumberFormat.UINT8_LE) == mask
-
 
 def write_register(reg: number, value: number):
     data = bytearray(2)
@@ -55,14 +48,11 @@ def write_register(reg: number, value: number):
     pins.i2c_write_buffer(COLOR_ADDRESS, data)
 
 
-def sensor_ready(channel: number):
-    if not select_color_channel(channel):
-        serial.write_line("MUX selection failed CH" + str(channel))
-        return False
+def sensor_ready():
     pins.i2c_write_number(COLOR_ADDRESS, 0x92, NumberFormat.UINT8_LE, True)
     chip_id = pins.i2c_read_number(COLOR_ADDRESS, NumberFormat.UINT8_LE)
     if chip_id != 0x44 and chip_id != 0x4d:
-        serial.write_line("TCS unexpected ID CH" + str(channel) + " ID " + str(chip_id))
+        serial.write_line("TCS unexpected ID " + str(chip_id))
         return False
     write_register(0x01, 0xeb)  # สะสมแสงประมาณ 50 มิลลิวินาที
     write_register(0x0f, 1)  # ขยายสัญญาณ 4 เท่า
@@ -73,12 +63,10 @@ def sensor_ready(channel: number):
     return True
 
 
-def check_color_sensors():
-    channel0_ready = sensor_ready(0)
-    channel1_ready = sensor_ready(1)
-    serial.write_line("TCS CH0 " + ("OK" if channel0_ready else "ERROR"))
-    serial.write_line("TCS CH1 " + ("OK" if channel1_ready else "ERROR"))
-    return channel0_ready and channel1_ready
+def check_color_sensor():
+    ready = sensor_ready()
+    serial.write_line("TCS " + ("OK" if ready else "ERROR"))
+    return ready
 
 
 RED = 1
@@ -87,9 +75,7 @@ GREEN = 3
 YELLOW = 4
 
 
-def channel_color(channel: number):
-    if not select_color_channel(channel):
-        return -1
+def read_color():
     pins.i2c_write_number(COLOR_ADDRESS, 0xb4, NumberFormat.UINT8_LE, True)
     data = pins.i2c_read_buffer(COLOR_ADDRESS, 8)
     clear = data.get_number(NumberFormat.UINT16_LE, 0)
@@ -177,7 +163,7 @@ def object_in_reach():
     return echo_us > 0 and echo_us <= PICKUP_DISTANCE_CM * 58
 
 
-# หยุดรอวัดระยะซ้ำก่อนอ่านสีจากกระป๋องทั้งสองข้าง
+# หยุดรอวัดระยะซ้ำก่อนอ่านสีจากกระป๋องข้างขวา
 def find_cans():
     target = input.compass_heading()
     if target < 0 or target >= 360:
@@ -304,29 +290,27 @@ def set_grip(left: number, right: number):
 
 
 def pick_cans():
-    global right_can_color, left_can_color, arm_cycle_incomplete, color_sensor_ready
+    global right_can_color, arm_cycle_incomplete, color_sensor_ready
     found = find_cans()
     stop_wheels()
     if not found or stopped:
         return False
     # ใช้สีเฉพาะตอนรับกระป๋อง ถ้าตอนเปิดเครื่องยังไม่พบหัวอ่าน ให้ลองอีกครั้งขณะล้อหยุด
     if not color_sensor_ready:
-        color_sensor_ready = check_color_sensors()
+        color_sensor_ready = check_color_sensor()
     if not color_sensor_ready or stopped or nb142_mask() != 31:
         return False
-    right = channel_color(0)
-    left = channel_color(1)
-    serial.write_line("S3 " + color_name(right) + " / S2 " + color_name(left))
+    right = read_color()
+    serial.write_line("S3 " + color_name(right))
     basic.pause(65)
     if stopped or nb142_mask() != 31:
         return False
-    if right <= 0 or left <= 0 or channel_color(0) != right or channel_color(1) != left:
+    if right <= 0 or read_color() != right:
         return False
     if stopped:
         return False
     arm_cycle_incomplete = True
     right_can_color = right
-    left_can_color = left
     set_grip(GRIP_LEFT_CLOSED, GRIP_RIGHT_CLOSED)
     basic.pause(550)
     move_rack(RACK_UP_COMMAND, RACK_UP_MS)
@@ -336,7 +320,7 @@ def pick_cans():
     return True
 
 
-# เมื่อคีบแล้ว จอแสดงสีแยกข้าง รถจอดถือไว้จนกว่าจะมีเส้นทางไปสถานี
+# เมื่อคีบแล้ว จอแสดงสีกระป๋องขวา รถจอดถือไว้จนกว่าจะมีเส้นทางไปสถานี
 def run_route():
     if arm_cycle_incomplete:
         return False
@@ -345,9 +329,6 @@ def run_route():
     if not right_can_color and not pick_cans():
         return False
     basic.show_string("R " + color_name(right_can_color))
-    if stopped:
-        return False
-    basic.show_string("L " + color_name(left_can_color))
     return not stopped
 
 
@@ -372,7 +353,7 @@ basic.show_icon(IconNames.YES, 0)
 stop_wheels()
 set_grip(GRIP_LEFT_OPEN, GRIP_RIGHT_OPEN)
 basic.pause(1000)
-color_sensor_ready = check_color_sensors()
+color_sensor_ready = check_color_sensor()
 if not color_sensor_ready:
     basic.show_string("I2C")
 input.compass_heading()  # เรียกเข็มทิศขณะรถจอด เพื่อให้ปรับเทียบก่อนเริ่มถ้าบอร์ดร้องขอ

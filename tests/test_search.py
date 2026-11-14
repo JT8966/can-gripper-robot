@@ -8,7 +8,7 @@ SOURCE = Path(__file__).resolve().parents[1] / "main.py"
 
 
 class Robot:
-    def __init__(self, sensors_present=(True, True), mux_present=True):
+    def __init__(self, sensor_present=True):
         self.ms = 0
         self.heading = 350
         self.mask = 31
@@ -16,14 +16,12 @@ class Robot:
         self.buttons = {}
         self.wheels = [(0, 0)] * 4
         self.servos = []
-        self.mux_mask = 0
-        self.mux_present = mux_present
-        self.sensors_present = sensors_present
+        self.sensor_present = sensor_present
         self.sensor_probes = []
         self.icon = None
         self.display = ""
         self.tick = lambda delay: None
-        self.can_colors = [1, 3]
+        self.can_color = 1
         self.env = dict(
             number=float, DigitalPin=NS(**{f"P{i}": i for i in range(17)}),
             MotionBitMotorChannel=NS(ALL=0, M1=1, M2=2, M3=3, M4=4),
@@ -44,30 +42,23 @@ class Robot:
             control=NS(wait_micros=lambda delay: None), serial=NS(write_line=lambda text: None),
         )
         exec(compile(SOURCE.read_text(encoding="utf-8"), str(SOURCE), "exec"), self.env)
-        self.classify = self.env["channel_color"]
-        self.env["channel_color"] = lambda channel: self.can_colors[channel]
+        self.classify = self.env["read_color"]
+        self.env["read_color"] = lambda: self.can_color
 
     def write_i2c(self, addr, value, fmt, repeated=False):
-        if addr == 0x70:
-            assert value in (1, 2) and not repeated
-            self.mux_mask = value if self.mux_present else 0
-        else:
-            assert addr == 0x29 and self.mux_mask in (1, 2) and repeated
+        assert addr == 0x29 and repeated
 
     def read_i2c(self, addr, fmt):
-        if addr == 0x70:
-            return self.mux_mask
-        assert addr == 0x29 and self.mux_mask in (1, 2)
-        channel = self.mux_mask - 1
-        self.sensor_probes.append(channel)
-        return 0x44 if self.sensors_present[channel] else 0
+        assert addr == 0x29
+        self.sensor_probes.append(0)
+        return 0x44 if self.sensor_present else 0
 
     def trig(self, pin, value):
         assert pin == 0
 
     def pulse(self, pin, level, timeout):
         assert pin == 1
-        assert not self.env["right_can_color"] and not self.env["left_can_color"]
+        assert not self.env["right_can_color"]
         return self.echo
 
     def drive(self, motor, direction, speed):
@@ -94,26 +85,22 @@ class Robot:
 
 
 class SearchTest(unittest.TestCase):
-    def test_both_color_channels_required(self):
-        for mux, present, probes in [(False, (True, True), []), (True, (False, True), [0, 1]),
-                                     (True, (True, False), [0, 1])]:
-            with self.subTest(mux=mux, present=present):
-                robot = Robot(sensors_present=present, mux_present=mux)
-                self.assertFalse(robot.env["color_sensor_ready"])
-                self.assertEqual(robot.sensor_probes, probes)
-                def arrive(delay):
-                    if robot.wheels[0][0] == 1:
-                        robot.echo = 580
-                robot.tick = arrive
-                robot.buttons["A"]()
-                self.assertEqual(robot.echo, 580)
-                self.assertEqual(robot.icon, 0)
-                self.assertEqual(robot.wheels, [(0, 0)] * 4)
-                self.assertEqual(robot.servos, [(2, 45), (3, 45)])
-                robot.mux_present, robot.sensors_present = True, (True, True)
-                robot.buttons["A"]()
-                self.assertTrue(robot.env["color_sensor_ready"])
-                self.assertEqual(robot.icon, 1)
+    def test_color_sensor_required(self):
+        robot = Robot(sensor_present=False)
+        self.assertFalse(robot.env["color_sensor_ready"])
+        def arrive(delay):
+            if robot.wheels[0][0] == 1:
+                robot.echo = 580
+        robot.tick = arrive
+        robot.buttons["A"]()
+        self.assertEqual(robot.echo, 580)
+        self.assertEqual(robot.icon, 0)
+        self.assertEqual(robot.wheels, [(0, 0)] * 4)
+        self.assertEqual(robot.servos, [(2, 45), (3, 45)])
+        robot.sensor_present = True
+        robot.buttons["A"]()
+        self.assertTrue(robot.env["color_sensor_ready"])
+        self.assertEqual(robot.icon, 1)
 
     def test_rgb_samples(self):
         robot = Robot()
@@ -124,16 +111,14 @@ class SearchTest(unittest.TestCase):
                 buf = NS(get_number=lambda fmt, offset: sample[offset // 2])
                 robot.env["pins"].i2c_read_buffer = lambda addr, n: buf
                 robot.env["NumberFormat"].UINT16_LE = 1
-                for channel in (0, 1):
-                    self.assertEqual(robot.classify(channel), expected)
-                    self.assertEqual(robot.mux_mask, 1 << channel)
+                self.assertEqual(robot.classify(), expected)
 
     def test_search_and_grip(self):
         for drift, turn_step in [(15, 15), (-15, 15), (15, 16)]:
             with self.subTest(drift=drift, turn_step=turn_step):
                 robot = Robot()
                 self.assertEqual((robot.icon, robot.ms, robot.servos),
-                                 (1, 1130, [(2, 45), (3, 45)]))
+                                 (1, 1065, [(2, 45), (3, 45)]))
                 reverse_times, turns = [], []
                 straight_ms = progress = previous_trim = 0
                 drifted = corrected = False
@@ -178,8 +163,7 @@ class SearchTest(unittest.TestCase):
                 self.assertTrue(corrected)
                 self.assertEqual(reverse_times, [50, 50])
                 self.assertEqual(turns, [80, 170] if turn_step == 15 else [86, 182])
-                self.assertEqual(robot.servos[2:], [
-                    (2, 45), (3, 45), (1, 75), (1, 90)])
+                self.assertEqual(robot.servos[2:], [(2, 45), (3, 45), (1, 75), (1, 90)])
                 self.assertEqual(robot.icon, 1)
 
     def test_alignment(self):
@@ -215,22 +199,22 @@ class SearchTest(unittest.TestCase):
                 self.assertEqual(robot.icon, int(action in ("recover", "turn")))
                 self.assertEqual(robot.wheels, [(0, 0)] * 4)
 
-    def test_remembers_each_can_separately(self):
-        for right, left in [(1, 3), (3, 1), (2, 4), (4, 2), (1, 1)]:
-            with self.subTest(right=right, left=left):
+    def test_remembers_can_color(self):
+        for color in [1, 2, 3, 4]:
+            with self.subTest(color=color):
                 robot = Robot()
-                robot.can_colors = [right, left]
+                robot.can_color = color
                 robot.echo = 580
                 robot.env.update(GRIP_RIGHT_CLOSED=60, GRIP_LEFT_CLOSED=70)
                 robot.buttons["A"]()
-                self.assertEqual((robot.env["right_can_color"], robot.env["left_can_color"]), (right, left))
+                self.assertEqual(robot.env["right_can_color"], color)
                 self.assertEqual(robot.servos[2:], [(2, 70), (3, 60), (1, 75), (1, 90)])
                 self.assertEqual(robot.wheels, [(0, 0)] * 4)
                 robot.buttons["B"]()
                 previous = robot.servos[:]
                 robot.buttons["A"]()
                 self.assertEqual(robot.servos, previous)
-                self.assertEqual(robot.sensor_probes, [0, 1])
+                self.assertEqual(robot.sensor_probes, [0])
 
     def test_cancel_during_pickup_lift_requires_reset(self):
         robot = Robot()
@@ -247,15 +231,15 @@ class SearchTest(unittest.TestCase):
         self.assertEqual(robot.servos, previous)
 
     def test_unrecognized_or_changing_can_color(self):
-        for samples in [[0, 1], [3, -1], [1, 3, 2], [1, 3, 1, 4]]:
+        for samples in [[0], [-1], [1, 2], [3, 4]]:
             with self.subTest(samples=samples):
                 robot = Robot()
                 robot.echo = 580
                 readings = iter(samples)
-                robot.env["channel_color"] = lambda channel: next(readings)
+                robot.env["read_color"] = lambda: next(readings)
                 robot.buttons["A"]()
                 self.assertEqual(robot.icon, 0)
-                self.assertEqual((robot.env["right_can_color"], robot.env["left_can_color"]), (0, 0))
+                self.assertEqual(robot.env["right_can_color"], 0)
                 self.assertEqual(robot.servos, [(2, 45), (3, 45)])
 
     def test_cancel_while_reversing(self):
@@ -264,7 +248,7 @@ class SearchTest(unittest.TestCase):
         robot.tick = lambda delay: robot.buttons["B"]() if robot.wheels[0][0] == -1 else None
         robot.buttons["A"]()
         self.assertEqual(robot.wheels, [(0, 0)] * 4)
-        self.assertEqual(robot.servos, [(2, 45), (3, 45), (1, 90)])
+        self.assertEqual(robot.servos[-1:], [(1, 90)])
         self.assertEqual(robot.icon, 0)
 
 
