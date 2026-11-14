@@ -1,5 +1,7 @@
 # แผนสำรองสำหรับสนามตัวอย่างหน้า 1 ตั้งรถกลาง START หันขึ้นตามภาพ
-SPEED = 255  # กำลังล้อ 0–255
+LEFT_FORWARD_SPEED = 255  # เดินตรง ล้อซ้าย M1/M2 (0–255)
+RIGHT_FORWARD_SPEED = 240  # เดินตรง ล้อขวา M3/M4 ลดลงทีละ 5 ถ้ารถยังเบนซ้าย
+TURN_SPEED = 255  # หมุนอยู่กับที่ ใช้กำลังนี้ทั้งสองฝั่ง
 TILE_MS = 500  # เวลาเดินหน้า 1 ช่อง (30 ซม.) ค่าเริ่มสำหรับจูนบนพื้นจริง
 RIGHT_90_MS = 300  # เวลาหมุนขวา 90° (ms)
 LEFT_90_MS = 300  # เวลาหมุนซ้าย 90° (ms)
@@ -35,24 +37,27 @@ def run_route():
     for step in ROUTE:
         if stopped:
             break
+        left = MotionBitMotorDirection.FORWARD
+        right = MotionBitMotorDirection.FORWARD
         if step > 0:
-            # M1/M2 ซ้าย และ M3/M4 ขวา เดินหน้าพร้อมกัน
-            motionbit.run_motor(MotionBitMotorChannel.ALL, MotionBitMotorDirection.FORWARD, SPEED)
+            left_speed = LEFT_FORWARD_SPEED
+            right_speed = RIGHT_FORWARD_SPEED
             duration = step * TILE_MS
         elif step == TURN_RIGHT or step == TURN_LEFT:
-            left = MotionBitMotorDirection.FORWARD
+            left_speed = TURN_SPEED
+            right_speed = TURN_SPEED
             right = MotionBitMotorDirection.BACKWARD
             duration = RIGHT_90_MS
             if step == TURN_LEFT:
                 left = MotionBitMotorDirection.BACKWARD
                 right = MotionBitMotorDirection.FORWARD
                 duration = LEFT_90_MS
-            motionbit.run_motor(MotionBitMotorChannel.M1, left, SPEED)
-            motionbit.run_motor(MotionBitMotorChannel.M2, left, SPEED)
-            motionbit.run_motor(MotionBitMotorChannel.M3, right, SPEED)
-            motionbit.run_motor(MotionBitMotorChannel.M4, right, SPEED)
         else:
             break
+        motionbit.run_motor(MotionBitMotorChannel.M1, left, left_speed)
+        motionbit.run_motor(MotionBitMotorChannel.M2, left, left_speed)
+        motionbit.run_motor(MotionBitMotorChannel.M3, right, right_speed)
+        motionbit.run_motor(MotionBitMotorChannel.M4, right, right_speed)
         basic.pause(duration)
         stop_wheels()
         basic.pause(BRAKE_MS)

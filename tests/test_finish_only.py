@@ -7,17 +7,20 @@ import unittest
 class FinishRouteTest(unittest.TestCase):
     def simulate(self, stop_at=None):
         wheels = [0] * 4
+        powers = [0] * 4
         moves, buttons = [], {}
 
         def run_motor(channel, direction, power):
-            self.assertEqual(power, 255)
-            if channel == 0:
-                wheels[:] = [direction] * 4
-            else:
-                wheels[channel - 1] = direction
+            self.assertIn(channel, (1, 2, 3, 4))
+            wheels[channel - 1] = direction
+            powers[channel - 1] = power
 
         def pause(duration):
             if any(wheels):
+                if wheels == [1, 1, 1, 1]:
+                    self.assertEqual(powers, [api["LEFT_FORWARD_SPEED"]] * 2 + [api["RIGHT_FORWARD_SPEED"]] * 2)
+                else:
+                    self.assertEqual(powers, [api["TURN_SPEED"]] * 4)
                 moves.append((tuple(wheels), duration))
                 if len(moves) == stop_at:
                     buttons["B"]()
@@ -26,6 +29,7 @@ class FinishRouteTest(unittest.TestCase):
         def brake(channel):
             self.assertEqual(channel, 0)
             wheels[:] = [0] * 4
+            powers[:] = [0] * 4
 
         api = dict(MotionBitMotorChannel=NS(ALL=0, M1=1, M2=2, M3=3, M4=4),
                    MotionBitMotorDirection=NS(FORWARD=1, BACKWARD=-1),
