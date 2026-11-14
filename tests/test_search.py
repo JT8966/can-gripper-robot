@@ -8,7 +8,7 @@ SOURCE = Path(__file__).resolve().parents[1] / "main.py"
 
 
 class Robot:
-    def __init__(self, sensor_present=True):
+    def __init__(self, sensors_present=(True, True), mux_present=True):
         self.ms = 0
         self.heading = 350
         self.mask = 31
@@ -16,11 +16,13 @@ class Robot:
         self.buttons = {}
         self.wheels = [(0, 0)] * 4
         self.servos = []
-        self.sensor_probes = 0
+        self.mux_mask = 0
+        self.mux_present = mux_present
+        self.sensors_present = sensors_present
+        self.sensor_probes = []
         self.icon = None
         self.tick = lambda delay: None
-        self.pick_color = 1
-        self.carry_steps = 0
+        self.can_colors = [1, 3]
         self.env = dict(
             number=float, DigitalPin=NS(**{f"P{i}": i for i in range(17)}),
             MotionBitMotorChannel=NS(ALL=0, M1=1, M2=2, M3=3, M4=4),
@@ -32,33 +34,38 @@ class Robot:
             PulseValue=NS(HIGH=1), NumberFormat=NS(UINT8_LE=0),
             pins=NS(digital_read_pin=lambda p: (self.mask >> (p - 12)) & 1,
                     digital_write_pin=self.trig, pulse_in=self.pulse,
-                    i2c_write_number=lambda *args: None, i2c_write_buffer=lambda *args: None,
-                    i2c_read_number=lambda *args: self.chip_id(sensor_present)),
+                    i2c_write_number=self.write_i2c, i2c_write_buffer=lambda *args: None,
+                    i2c_read_number=self.read_i2c),
             motionbit=NS(run_motor=self.drive, brake_motor=self.brake, set_servo_position=self.servo),
             basic=NS(pause=self.pause, clear_screen=lambda: None, show_string=lambda text: None,
                      show_icon=lambda icon: setattr(self, "icon", icon)),
             control=NS(wait_micros=lambda delay: None), serial=NS(write_line=lambda text: None),
         )
         exec(compile(SOURCE.read_text(encoding="utf-8"), str(SOURCE), "exec"), self.env)
-        self.classify = self.env["floor_color"]
-        self.env["floor_color"] = self.floor_color
+        self.classify = self.env["channel_color"]
+        self.env["channel_color"] = lambda channel: self.can_colors[channel]
 
-    def chip_id(self, present):
-        self.sensor_probes += 1
-        return 0x44 if present else 0
+    def write_i2c(self, addr, value, fmt, repeated=False):
+        if addr == 0x70:
+            assert value in (1, 2) and not repeated
+            self.mux_mask = value if self.mux_present else 0
+        else:
+            assert addr == 0x29 and self.mux_mask in (1, 2) and repeated
 
-    def floor_color(self):
-        # Same pickup patch, wrong colour, then a separate matching patch.
-        if self.env["carrying_color"] and 3 <= self.carry_steps < 7:
-            return 1 if self.pick_color == 3 else 3
-        return self.pick_color
+    def read_i2c(self, addr, fmt):
+        if addr == 0x70:
+            return self.mux_mask
+        assert addr == 0x29 and self.mux_mask in (1, 2)
+        channel = self.mux_mask - 1
+        self.sensor_probes.append(channel)
+        return 0x44 if self.sensors_present[channel] else 0
 
     def trig(self, pin, value):
         assert pin == 0
 
     def pulse(self, pin, level, timeout):
         assert pin == 1
-        assert not self.env["carrying_color"], "held can must not trigger pickup again"
+        assert not self.env["right_can_color"] and not self.env["left_can_color"]
         return self.echo
 
     def drive(self, motor, direction, speed):
@@ -81,12 +88,21 @@ class Robot:
         self.ms += delay
         assert self.ms < 30000, "route did not finish"
         assert self.wheels[0] == self.wheels[1] and self.wheels[2] == self.wheels[3]
-        if self.env["carrying_color"] and self.wheels[0][0] == self.wheels[2][0] == 1:
-            self.carry_steps += 1
         self.tick(delay)
 
 
 class SearchTest(unittest.TestCase):
+    def test_both_color_channels_required(self):
+        for mux, present, probes in [(False, (True, True), []), (True, (False, True), [0, 1]),
+                                     (True, (True, False), [0, 1])]:
+            with self.subTest(mux=mux, present=present):
+                robot = Robot(sensors_present=present, mux_present=mux)
+                self.assertFalse(robot.env["color_sensor_ready"])
+                self.assertEqual(robot.sensor_probes, probes)
+                robot.buttons["A"]()
+                self.assertEqual(robot.icon, 0)
+                self.assertEqual(robot.wheels, [(0, 0)] * 4)
+
     def test_rgb_samples(self):
         robot = Robot()
         for sample, expected in [((150, 80, 72, 18), 4), ((150, 95, 30, 25), 1),
@@ -96,14 +112,16 @@ class SearchTest(unittest.TestCase):
                 buf = NS(get_number=lambda fmt, offset: sample[offset // 2])
                 robot.env["pins"].i2c_read_buffer = lambda addr, n: buf
                 robot.env["NumberFormat"].UINT16_LE = 1
-                self.assertEqual(robot.classify(), expected)
+                for channel in (0, 1):
+                    self.assertEqual(robot.classify(channel), expected)
+                    self.assertEqual(robot.mux_mask, 1 << channel)
 
     def test_search_and_grip(self):
         for drift, turn_step in [(15, 15), (-15, 15), (15, 16)]:
             with self.subTest(drift=drift, turn_step=turn_step):
                 robot = Robot()
                 self.assertEqual((robot.icon, robot.ms, robot.servos),
-                                 (1, 1065, [(2, 45), (3, 45)]))
+                                 (1, 1130, [(2, 45), (3, 45)]))
                 reverse_times, turns = [], []
                 straight_ms = progress = previous_trim = 0
                 drifted = corrected = False
@@ -149,7 +167,7 @@ class SearchTest(unittest.TestCase):
                 self.assertEqual(reverse_times, [50, 50])
                 self.assertEqual(turns, [80, 170] if turn_step == 15 else [86, 182])
                 self.assertEqual(robot.servos[2:], [
-                    (2, 45), (3, 45), (1, 75), (1, 90), (1, 105), (1, 90), (3, 45), (2, 45)])
+                    (2, 45), (3, 45), (1, 75), (1, 90)])
                 self.assertEqual(robot.icon, 1)
 
     def test_alignment(self):
@@ -185,25 +203,22 @@ class SearchTest(unittest.TestCase):
                 self.assertEqual(robot.icon, int(action in ("recover", "turn")))
                 self.assertEqual(robot.wheels, [(0, 0)] * 4)
 
-    def test_delivers_each_color_only_at_a_separate_matching_patch(self):
-        for color in (1, 2, 3, 4):
-            with self.subTest(color=color):
+    def test_remembers_each_can_separately(self):
+        for right, left in [(1, 3), (3, 1), (2, 4), (4, 2), (1, 1)]:
+            with self.subTest(right=right, left=left):
                 robot = Robot()
-                robot.pick_color = color
+                robot.can_colors = [right, left]
                 robot.echo = 580
-                robot.env.update(GRIP_RIGHT_CLOSED=60, GRIP_LEFT_CLOSED=70,
-                                 RACK_UP_MS=300, RACK_DOWN_MS=300)
+                robot.env.update(GRIP_RIGHT_CLOSED=60, GRIP_LEFT_CLOSED=70)
                 robot.buttons["A"]()
-                self.assertGreaterEqual(robot.carry_steps, 7)
-                self.assertEqual(robot.icon, 1)
-                cycle = [(2, 70), (3, 60), (1, 75), (1, 90),
-                         (1, 105), (1, 90), (3, 45), (2, 45)]
-                self.assertEqual(robot.servos[2:], cycle)
-                robot.carry_steps = 0
+                self.assertEqual((robot.env["right_can_color"], robot.env["left_can_color"]), (right, left))
+                self.assertEqual(robot.servos[2:], [(2, 70), (3, 60), (1, 75), (1, 90)])
+                self.assertEqual(robot.wheels, [(0, 0)] * 4)
+                robot.buttons["B"]()
+                previous = robot.servos[:]
                 robot.buttons["A"]()
-                self.assertEqual(robot.icon, 1)
-                self.assertEqual(robot.servos[2:], cycle * 2)
-                self.assertEqual(robot.sensor_probes, 1)
+                self.assertEqual(robot.servos, previous)
+                self.assertEqual(robot.sensor_probes, [0, 1])
 
     def test_cancel_during_pickup_lift_requires_reset(self):
         robot = Robot()
@@ -214,60 +229,22 @@ class SearchTest(unittest.TestCase):
         self.assertEqual(robot.icon, 0)
         self.assertEqual(robot.wheels, [(0, 0)] * 4)
         previous = robot.servos[:]
-        robot.env["drive_to_station"] = lambda delivering: self.fail("searched again after interrupted lift")
+        robot.env["find_cans"] = lambda: self.fail("searched again after interrupted lift")
         robot.buttons["A"]()
         self.assertEqual(robot.icon, 0)
         self.assertEqual(robot.servos, previous)
 
-    def test_cancel_during_drop(self):
-        for command, delay in [((1, 105), 300), ((3, 45), 400), ((2, 45), 400)]:
-            with self.subTest(command=command):
+    def test_unrecognized_or_changing_can_color(self):
+        for samples in [[0, 1], [3, -1], [1, 3, 2], [1, 3, 1, 4]]:
+            with self.subTest(samples=samples):
                 robot = Robot()
                 robot.echo = 580
-                robot.env.update(GRIP_RIGHT_CLOSED=60, GRIP_LEFT_CLOSED=70, RACK_DOWN_MS=300,
-                                 RACK_UP_MS=300)
-                before_stop = []
-
-                def tick(pause_ms):
-                    if robot.carry_steps >= 7 and robot.servos[-1] == command:
-                        self.assertEqual(pause_ms, delay)
-                        before_stop.extend(robot.servos)
-                        robot.buttons["B"]()
-
-                robot.tick = tick
+                readings = iter(samples)
+                robot.env["channel_color"] = lambda channel: next(readings)
                 robot.buttons["A"]()
-                self.assertTrue(before_stop)
                 self.assertEqual(robot.icon, 0)
-                after_stop = robot.servos[len(before_stop):]
-                self.assertEqual(after_stop[:1], [(1, 90)])
-                self.assertTrue(all(cmd == (1, 90) for cmd in after_stop))
-                self.assertEqual(robot.wheels, [(0, 0)] * 4)
-                previous = robot.servos[:]
-                robot.buttons["A"]()
-                self.assertEqual(robot.servos, previous)
-
-    def test_cancel_while_carrying_keeps_grip(self):
-        robot = Robot()
-        robot.echo = 580
-        robot.env.update(GRIP_RIGHT_CLOSED=60, GRIP_LEFT_CLOSED=70)
-        robot.tick = lambda delay: robot.buttons["B"]() if robot.carry_steps == 2 else None
-        robot.buttons["A"]()
-        self.assertEqual(robot.icon, 0)
-        self.assertEqual(robot.env["carrying_color"], robot.pick_color)
-        self.assertEqual([p for p in robot.servos if p[0] in (2, 3)][-2:], [(2, 70), (3, 60)])
-        robot.tick = lambda delay: None
-        robot.buttons["A"]()
-        self.assertGreaterEqual(robot.carry_steps, 7)
-        self.assertEqual(robot.icon, 1)
-        self.assertEqual(robot.sensor_probes, 1)
-
-    def test_missing_sensor_or_unrecognized_pickup(self):
-        for ready, color in ((False, 1), (True, -1), (True, 0)):
-            robot = Robot(sensor_present=ready)
-            robot.echo, robot.pick_color = 580, color
-            robot.buttons["A"]()
-            self.assertEqual(robot.icon, 0)
-            self.assertEqual(robot.env["carrying_color"], 0)
+                self.assertEqual((robot.env["right_can_color"], robot.env["left_can_color"]), (0, 0))
+                self.assertEqual(robot.servos, [(2, 45), (3, 45)])
 
     def test_cancel_while_reversing(self):
         robot = Robot()
