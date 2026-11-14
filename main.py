@@ -8,9 +8,10 @@ RACK_DOWN_COMMAND = 105
 RACK_DOWN_MS = 500
 # S2 กางไปทางซ้าย S3 กางไปทางขวา มุมของแต่ละท่าอ้างอิงจากเพลาของตัวนั้น
 # สั่ง CLOSED เดิมที่ 45 แล้วหุ่นกาง แสดงว่า 45 คือท่ากาง จึงใช้ 10 เป็นท่าหุบทั้งสองข้าง
-GRIP_LEFT_OPEN = 45
+# ลดมุมกางเริ่มต้นลง 5° ตามที่ขอ (40) ถ้าปากคีบยังชนกระป๋องตอนรับ ให้เพิ่มกลับทีละ 2–3°
+GRIP_LEFT_OPEN = 40
 GRIP_LEFT_CLOSED = 10
-GRIP_RIGHT_OPEN = 45
+GRIP_RIGHT_OPEN = 40
 GRIP_RIGHT_CLOSED = 10
 SPEED = 255  # กำลังล้อพื้นฐาน 0–255 ค่า 255 ใช้ตอนออกตัว ถอย และหมุน
 LEFT = MotionBitMotorDirection.FORWARD  # ทิศเดินหน้าของล้อซ้าย M1/M2 กลับค่านี้ถ้าทั้งฝั่งหมุนย้อน
@@ -234,6 +235,12 @@ def find_cans():
     start_time = input.running_time()
     target = input.compass_heading()
     if target < 0 or target >= 360:
+        # เข็มทิศยังไม่พร้อม ให้เปิดหน้าจอสอบเทียบเองแล้วลองอ่านอีกครั้ง
+        input.calibrate_compass()
+        target = input.compass_heading()
+    serial.write_line("SEARCH HEADING " + str(target))
+    if target < 0 or target >= 360:
+        serial.write_line("COMPASS FAIL")
         return 0
     turning = False
     turn_started = 0
@@ -413,6 +420,31 @@ def run_steps(steps):
     return not stopped
 
 
+# กด B ค้างแล้วเปิดเครื่อง: หมุนล้อทดสอบทีละท่า ใช้แยกว่าปัญหาล้อไม่หมุนมาจากไฟเลี้ยงหรือโปรแกรม
+def motor_check():
+    serial.write_line("MOTOR TEST")
+    basic.show_arrow(ArrowNames.NORTH, 0)
+    drive_sides(LEFT, RIGHT)
+    basic.pause(800)
+    stop_wheels()
+    basic.pause(300)
+    basic.show_arrow(ArrowNames.SOUTH, 0)
+    drive_sides(opposite(LEFT), opposite(RIGHT))
+    basic.pause(800)
+    stop_wheels()
+    basic.pause(300)
+    basic.show_arrow(ArrowNames.EAST, 0)
+    drive_sides(LEFT, opposite(RIGHT))
+    basic.pause(800)
+    stop_wheels()
+    basic.pause(300)
+    basic.show_arrow(ArrowNames.WEST, 0)
+    drive_sides(opposite(LEFT), RIGHT)
+    basic.pause(800)
+    stop_wheels()
+    basic.show_icon(IconNames.YES, 0)
+
+
 # S1 หมุนตามเวลาที่ตั้งแล้วรับค่า 90 เพื่อหยุด
 def move_rack(command: number, duration: number):
     if stopped or duration <= 0:
@@ -533,8 +565,10 @@ def on_button_pressed_a():
         return
     stopped = False
     busy = True
+    serial.write_line("START")
     try:
         basic.clear_screen()
+        basic.show_arrow(ArrowNames.NORTH, 0)  # ยืนยันว่าได้รับคำสั่งแล้วก่อนเริ่มภารกิจ
         done = run_match()
         if done:
             basic.show_icon(IconNames.YES)
@@ -549,6 +583,9 @@ basic.show_icon(IconNames.YES, 0)
 stop_wheels()
 set_grip(GRIP_LEFT_OPEN, GRIP_RIGHT_OPEN)
 basic.pause(1000)
+if input.button_is_pressed(Button.B):
+    stopped = False
+    motor_check()
 color_sensor_ready = False  # ตรวจ TCS34725 ตอน pick_cans แทน กันช่วงบูตค้างถ้าเซ็นเซอร์หลุด
 basic.show_leds("""
     . # # # .

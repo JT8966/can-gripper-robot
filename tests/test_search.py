@@ -27,9 +27,12 @@ class Robot:
             MotionBitMotorChannel=NS(ALL=0, M1=1, M2=2, M3=3, M4=4),
             MotionBitMotorDirection=NS(FORWARD=1, BACKWARD=-1),
             MotionBitServoChannel=NS(S1=1, S2=2, S3=3),
-            Button=NS(A="A", B="B"), IconNames=NS(YES=1, NO=0),
+            Button=NS(A="A", B="B"),
+            IconNames=NS(YES=1, NO=0),
+            ArrowNames=NS(NORTH=0, EAST=2, SOUTH=4, WEST=6),
             input=NS(on_button_pressed=self.buttons.__setitem__, running_time=lambda: self.ms,
-                     compass_heading=lambda: self.heading),
+                     compass_heading=lambda: self.heading, calibrate_compass=lambda: None,
+                     button_is_pressed=lambda button: False),
             PulseValue=NS(HIGH=1), NumberFormat=NS(UINT8_LE=0),
             pins=NS(digital_read_pin=lambda p: (self.mask >> (p - 12)) & 1,
                     digital_write_pin=self.trig, pulse_in=self.pulse,
@@ -95,7 +98,7 @@ class SearchTest(unittest.TestCase):
         self.assertFalse(robot.env["pick_cans"]())
         self.assertEqual(robot.echo, 580)
         self.assertEqual(robot.wheels, [(0, 0)] * 4)
-        self.assertEqual(robot.servos, [(2, 45), (3, 45)])
+        self.assertEqual(robot.servos, [(2, 40), (3, 40)])
         robot.sensor_present = True
         self.assertTrue(robot.env["pick_cans"]())
         self.assertTrue(robot.env["color_sensor_ready"])
@@ -115,7 +118,7 @@ class SearchTest(unittest.TestCase):
         for drift, turn_step in [(15, 15), (-15, 15), (15, 16)]:
             with self.subTest(drift=drift, turn_step=turn_step):
                 robot = Robot()
-                self.assertEqual((robot.ms, robot.servos), (1000, [(2, 45), (3, 45)]))
+                self.assertEqual((robot.ms, robot.servos), (1000, [(2, 40), (3, 40)]))
                 reverse_times, turns = [], []
                 straight_ms = progress = previous_trim = 0
                 drifted = corrected = False
@@ -199,10 +202,10 @@ class SearchTest(unittest.TestCase):
     def test_place_release_sequence(self):
         robot = Robot()
         self.assertTrue(robot.env["place_can"](4))
-        self.assertEqual(robot.servos[2:], [(1, 75), (2, 45), (3, 45), (1, 105), (1, 90)])
+        self.assertEqual(robot.servos[2:], [(1, 75), (2, 40), (3, 40), (1, 105), (1, 90)])
         self.assertFalse(robot.env["arm_cycle_incomplete"])
         self.assertFalse(robot.env["place_can"](0))
-        self.assertEqual(robot.servos[2:], [(1, 75), (2, 45), (3, 45), (1, 105), (1, 90)])
+        self.assertEqual(robot.servos[2:], [(1, 75), (2, 40), (3, 40), (1, 105), (1, 90)])
 
     def test_cancel_during_pickup_lift_requires_reset(self):
         robot = Robot()
@@ -225,7 +228,7 @@ class SearchTest(unittest.TestCase):
                 robot.env["read_color"] = lambda: next(readings)
                 self.assertFalse(robot.env["pick_cans"]())
                 self.assertEqual(robot.env["right_can_color"], 0)
-                self.assertEqual(robot.servos, [(2, 45), (3, 45)])
+                self.assertEqual(robot.servos, [(2, 40), (3, 40)])
 
     def test_cancel_while_reversing(self):
         robot = Robot()
