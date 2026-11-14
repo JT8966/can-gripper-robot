@@ -62,6 +62,7 @@ class Robot:
         return self.echo
 
     def drive(self, motor, direction, speed):
+        assert not self.env["stopped"], "wheel command after B"
         assert 175 <= speed <= 255
         if motor == 0:
             assert speed == 255
@@ -196,7 +197,7 @@ class SearchTest(unittest.TestCase):
                 self.assertGreaterEqual(robot.carry_steps, 7)
                 self.assertEqual(robot.icon, 1)
                 cycle = [(4, 10), (5, 20), (1, 75), (1, 90),
-                    (4, 60), (5, 70), (2, 105), (2, 90), (1, 105), (1, 90), (1, 75), (1, 90),
+                    (4, 60), (5, 70), (1, 105), (1, 90), (1, 75), (1, 90), (2, 105), (2, 90),
                     (4, 10), (5, 20), (2, 75), (2, 90), (1, 105), (1, 90)]
                 self.assertEqual(robot.servos[4:], cycle)
                 robot.carry_steps = 0
@@ -205,18 +206,33 @@ class SearchTest(unittest.TestCase):
                 self.assertEqual(robot.servos[4:], cycle * 2)
                 self.assertEqual(robot.sensor_probes, 1)
 
-    def test_cancel_during_s2_return(self):
-        robot = Robot()
-        robot.echo = 580
-        robot.env.update(ROTATE_RIGHT_MS=180, ROTATE_RETURN_MS=160)
-        robot.tick = lambda delay: robot.buttons["B"]() if robot.servos[-1] == (2, 75) else None
-        robot.buttons["A"]()
-        self.assertEqual(robot.icon, 0)
-        self.assertEqual(robot.servos[-1], (2, 90))
-        previous = robot.servos[:]
-        robot.buttons["A"]()
-        self.assertEqual(robot.servos, previous)
-        self.assertEqual(robot.sensor_probes, 1)
+    def test_cancel_during_drop(self):
+        for command, delay in [((1, 75), 300), ((2, 105), 180), ((4, 10), 400),
+                               ((5, 20), 400), ((2, 75), 160)]:
+            with self.subTest(command=command):
+                robot = Robot()
+                robot.echo = 580
+                robot.env.update(GRIP_RIGHT_CLOSED=60, GRIP_LEFT_CLOSED=70, RACK_DOWN_MS=300,
+                                 RACK_UP_MS=300, ROTATE_RIGHT_MS=180, ROTATE_RETURN_MS=160)
+                before_stop = []
+
+                def tick(pause_ms):
+                    if robot.carry_steps >= 7 and robot.servos[-1] == command:
+                        self.assertEqual(pause_ms, delay)
+                        before_stop.extend(robot.servos)
+                        robot.buttons["B"]()
+
+                robot.tick = tick
+                robot.buttons["A"]()
+                self.assertTrue(before_stop)
+                self.assertEqual(robot.icon, 0)
+                after_stop = robot.servos[len(before_stop):]
+                self.assertEqual(after_stop[:2], [(1, 90), (2, 90)])
+                self.assertTrue(all(cmd in [(1, 90), (2, 90)] for cmd in after_stop))
+                self.assertEqual(robot.wheels, [(0, 0)] * 4)
+                previous = robot.servos[:]
+                robot.buttons["A"]()
+                self.assertEqual(robot.servos, previous)
 
     def test_cancel_while_carrying_keeps_grip(self):
         robot = Robot()

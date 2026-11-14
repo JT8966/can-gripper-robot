@@ -8,7 +8,7 @@ RACK_DOWN_MS = 0
 RACK_UP_COMMAND = 105
 RACK_UP_MS = 0  # จูนเวลายกกระป๋องขึ้นก่อนออกเดิน และยกรางกลับหลังวาง
 ROTATE_RIGHT_COMMAND = 105
-# เวลาหมุน S2 หลังหนีบ ตั้งเป็น 0 เพื่อค้างท่าเดิม
+# เวลาหมุน S2 ที่จุดวางก่อนเปิดวงขวา ตั้งเป็น 0 เพื่อค้างท่าเดิม
 ROTATE_RIGHT_MS = 0
 # S2 คืนท่าหลังปล่อย ใช้ความเร็วตรงข้ามรอบค่าหยุด 90 และจูนเวลาคืนแยกได้
 ROTATE_RETURN_COMMAND = 180 - ROTATE_RIGHT_COMMAND
@@ -332,7 +332,6 @@ def run_route():
         carrying_color = picked
         left_pickup = False
         basic.pause(550)
-        run_timed_servo(MotionBitServoChannel.S2, ROTATE_RIGHT_COMMAND, ROTATE_RIGHT_MS)
         run_timed_servo(MotionBitServoChannel.S1, RACK_UP_COMMAND, RACK_UP_MS)
         transport_ready = not stopped
     if stopped:
@@ -343,10 +342,16 @@ def run_route():
         return False
     transport_ready = False
     run_timed_servo(MotionBitServoChannel.S1, RACK_DOWN_COMMAND, RACK_DOWN_MS)
+    run_timed_servo(MotionBitServoChannel.S2, ROTATE_RIGHT_COMMAND, ROTATE_RIGHT_MS)
     if stopped:
         return False
-    set_grip(GRIP_RIGHT_OPEN, GRIP_LEFT_OPEN)
-    basic.pause(550)
+    # ปล่อยใบขวาก่อน ถ้ากด B ระหว่างรอ วงซ้ายจะยังคีบใบที่สองไว้
+    motionbit.set_servo_position(MotionBitServoChannel.S4, GRIP_RIGHT_OPEN)
+    basic.pause(400)
+    if stopped:
+        return False
+    motionbit.set_servo_position(MotionBitServoChannel.S5, GRIP_LEFT_OPEN)
+    basic.pause(400)
     if ROTATE_RIGHT_MS > 0 and ROTATE_RIGHT_COMMAND != 90:
         run_timed_servo(MotionBitServoChannel.S2, ROTATE_RETURN_COMMAND, ROTATE_RETURN_MS)
     run_timed_servo(MotionBitServoChannel.S1, RACK_UP_COMMAND, RACK_UP_MS)
