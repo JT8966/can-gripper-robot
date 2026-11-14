@@ -148,7 +148,10 @@ class SearchTest(unittest.TestCase):
                 self.assertTrue(corrected)
                 self.assertEqual(reverse_times, [50, 50])
                 self.assertEqual(turns, [80, 170] if turn_step == 15 else [86, 182])
-                self.assertEqual(robot.servos[4:], [(4, 10), (5, 20)] * 3)
+                self.assertEqual(robot.servos[4:], [
+                    (4, 10), (5, 20), (1, 75), (1, 90), (4, 20), (5, 20), (1, 105), (1, 90),
+                    (1, 75), (1, 90), (2, 105), (2, 90), (4, 10), (5, 20), (2, 75), (2, 90),
+                    (1, 105), (1, 90)])
                 self.assertEqual(robot.icon, 1)
 
     def test_alignment(self):
@@ -205,6 +208,20 @@ class SearchTest(unittest.TestCase):
                 self.assertEqual(robot.icon, 1)
                 self.assertEqual(robot.servos[4:], cycle * 2)
                 self.assertEqual(robot.sensor_probes, 1)
+
+    def test_cancel_during_first_lowering_requires_reset(self):
+        robot = Robot()
+        robot.echo = 580
+        robot.env.update(RACK_DOWN_MS=300)
+        robot.tick = lambda delay: robot.buttons["B"]() if robot.servos[-1] == (1, 75) else None
+        robot.buttons["A"]()
+        self.assertEqual(robot.icon, 0)
+        self.assertEqual(robot.wheels, [(0, 0)] * 4)
+        previous = robot.servos[:]
+        robot.env["drive_to_station"] = lambda delivering: self.fail("searched again with rack lowered")
+        robot.buttons["A"]()
+        self.assertEqual(robot.icon, 0)
+        self.assertEqual(robot.servos, previous)
 
     def test_cancel_during_drop(self):
         for command, delay in [((1, 75), 300), ((2, 105), 180), ((4, 10), 400),

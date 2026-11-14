@@ -3,22 +3,19 @@
 
 # S1 ยก–ลดราง และ S2 หมุนที่คีบขวา เป็นเซอร์โว 360° ค่า 90 คือหยุด ค่าที่ต่างจาก 90 กำหนดทิศและความเร็ว
 RACK_DOWN_COMMAND = 75
-# เวลาลดรางเป็นมิลลิวินาที ตั้งเป็น 0 เพื่อข้ามการลดจนกว่าจะจูนระยะจริง
-RACK_DOWN_MS = 0
+RACK_DOWN_MS = 500  # S1 เวลาจากท่ายกถึงระดับคีบ (ms)
 RACK_UP_COMMAND = 105
-RACK_UP_MS = 0  # จูนเวลายกกระป๋องขึ้นก่อนออกเดิน และยกรางกลับหลังวาง
+RACK_UP_MS = 500  # S1 เวลาจากระดับคีบกลับขึ้นถึงท่าขน (ms)
 ROTATE_RIGHT_COMMAND = 105
-# เวลาหมุน S2 ที่จุดวางก่อนเปิดวงขวา ตั้งเป็น 0 เพื่อค้างท่าเดิม
-ROTATE_RIGHT_MS = 0
-# S2 คืนท่าหลังปล่อย ใช้ความเร็วตรงข้ามรอบค่าหยุด 90 และจูนเวลาคืนแยกได้
+ROTATE_RIGHT_MS = 500  # S2 เวลาหมุนวงขวาจากท่าขนไปจุดปล่อย (ms)
+# S2 คืนท่าหลังปล่อย ใช้ความเร็วตรงข้ามรอบค่าหยุด 90
 ROTATE_RETURN_COMMAND = 180 - ROTATE_RIGHT_COMMAND
-ROTATE_RETURN_MS = ROTATE_RIGHT_MS
+ROTATE_RETURN_MS = 500  # S2 เวลาหมุนกลับถึงท่าเริ่ม (ms) ปรับแยกจากขาไป
 # S4 ขวาและ S5 ซ้ายเป็นเซอร์โว 180° ตัวเลขด้านล่างคือมุมปากคีบแต่ละข้าง
-GRIP_RIGHT_OPEN = 10
-GRIP_LEFT_OPEN = 20
-# ใส่มุมหนีบที่วัดได้ของแต่ละข้างตรงนี้ ตอนนี้ตั้งเท่ามุมเปิดจึงยังไม่หุบ
-GRIP_RIGHT_CLOSED = GRIP_RIGHT_OPEN
-GRIP_LEFT_CLOSED = GRIP_LEFT_OPEN
+GRIP_RIGHT_OPEN = 10  # S4 มุมอ้าขวา (องศา)
+GRIP_LEFT_OPEN = 20  # S5 มุมอ้าซ้ายชั่วคราว ใส่มุมอ้าที่วัดได้ตรงนี้
+GRIP_RIGHT_CLOSED = 20  # S4 มุมหุบขวาที่ยึดกระป๋องได้ (องศา)
+GRIP_LEFT_CLOSED = 20  # S5 มุมหุบซ้าย (องศา) ตอนนี้เท่ามุมอ้า ก้ามซ้ายจึงค้างที่เดิม
 SPEED = 255  # กำลังล้อพื้นฐาน 0–255 ค่า 255 ใช้ตอนออกตัว ถอย และหมุน
 LEFT = MotionBitMotorDirection.FORWARD  # ทิศเดินหน้าของล้อซ้าย M1/M2 กลับค่านี้ถ้าทั้งฝั่งหมุนย้อน
 RIGHT = MotionBitMotorDirection.FORWARD  # ทิศเดินหน้าของล้อขวา M3/M4 กลับค่านี้ถ้าทั้งฝั่งหมุนย้อน
@@ -33,7 +30,7 @@ busy = True
 stopped = False
 carrying_color = 0  # เก็บสีไว้จนกว่าจะปล่อย แม้หยุดด้วย B ระหว่างขน
 left_pickup = False
-transport_ready = False  # ถ้ายกหรือลดค้างเมื่อกด B ให้จัดรางด้วยมือก่อนรีเซ็ต
+arm_cycle_incomplete = False  # ถ้าหยุดกลางลำดับแขน ต้องจัดกลไกกลับท่าเริ่มแล้วรีเซ็ต
 
 
 def stop_wheels():
@@ -314,8 +311,8 @@ def set_grip(right: number, left: number):
 
 # งานหนึ่งรอบ รับจากพื้นสีใด นำไปวางบนแถบสีเดียวกันอีกจุด
 def run_route():
-    global carrying_color, left_pickup, transport_ready
-    if carrying_color and not transport_ready:
+    global carrying_color, left_pickup, arm_cycle_incomplete
+    if arm_cycle_incomplete:
         return False
     if not color_sensor_ready or stopped:
         return False
@@ -325,6 +322,7 @@ def run_route():
         stop_wheels()
         if not picked or stopped:
             return False
+        arm_cycle_incomplete = True  # ล็อกก่อนลดรางครั้งแรก แม้ยังไม่ได้บันทึกสีของกระป๋อง
         run_timed_servo(MotionBitServoChannel.S1, RACK_DOWN_COMMAND, RACK_DOWN_MS)
         if stopped:
             return False
@@ -333,14 +331,14 @@ def run_route():
         left_pickup = False
         basic.pause(550)
         run_timed_servo(MotionBitServoChannel.S1, RACK_UP_COMMAND, RACK_UP_MS)
-        transport_ready = not stopped
-    if stopped:
-        return False
+        if stopped:
+            return False
+        arm_cycle_incomplete = False  # ยกเสร็จแล้ว กด B ตอนรถวิ่งขนแล้วกด A เพื่อขนต่อได้
     arrived = drive_to_station(True)
     stop_wheels()
     if not arrived or stopped:
         return False
-    transport_ready = False
+    arm_cycle_incomplete = True
     run_timed_servo(MotionBitServoChannel.S1, RACK_DOWN_COMMAND, RACK_DOWN_MS)
     run_timed_servo(MotionBitServoChannel.S2, ROTATE_RIGHT_COMMAND, ROTATE_RIGHT_MS)
     if stopped:
@@ -359,6 +357,7 @@ def run_route():
         return False
     # ปิดรอบเมื่อคืนชุดคีบเสร็จ ถ้ากด B กลางทางให้จัดท่าจริงก่อนรีเซ็ต
     carrying_color = 0
+    arm_cycle_incomplete = False
     return True
 
 
