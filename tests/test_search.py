@@ -163,7 +163,7 @@ class SearchTest(unittest.TestCase):
                 self.assertTrue(corrected)
                 self.assertEqual(reverse_times, [50, 50])
                 self.assertEqual(turns, [80, 170] if turn_step == 15 else [86, 182])
-                self.assertEqual(robot.servos[2:], [(2, 45), (3, 45), (1, 75), (1, 90)])
+                self.assertEqual(robot.servos[2:], [(2, 10), (3, 10), (1, 75), (1, 90)])
                 self.assertEqual(robot.icon, 1)
 
     def test_alignment(self):

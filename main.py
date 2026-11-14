@@ -7,11 +7,11 @@ RACK_UP_MS = 500
 RACK_DOWN_COMMAND = 105
 RACK_DOWN_MS = 500
 # S2 กางไปทางซ้าย S3 กางไปทางขวา มุมของแต่ละท่าอ้างอิงจากเพลาของตัวนั้น
-# มุมกางและหุบที่ระบุเท่ากัน วงคีบจึงค้างที่ 45° จนกว่าจะปรับมุมหุบ
+# สั่ง CLOSED เดิมที่ 45 แล้วหุ่นกาง แสดงว่า 45 คือท่ากาง จึงใช้ 10 เป็นท่าหุบทั้งสองข้าง
 GRIP_LEFT_OPEN = 45
-GRIP_LEFT_CLOSED = 45
+GRIP_LEFT_CLOSED = 10
 GRIP_RIGHT_OPEN = 45
-GRIP_RIGHT_CLOSED = 45
+GRIP_RIGHT_CLOSED = 10
 SPEED = 255  # กำลังล้อพื้นฐาน 0–255 ค่า 255 ใช้ตอนออกตัว ถอย และหมุน
 LEFT = MotionBitMotorDirection.FORWARD  # ทิศเดินหน้าของล้อซ้าย M1/M2 กลับค่านี้ถ้าทั้งฝั่งหมุนย้อน
 RIGHT = MotionBitMotorDirection.FORWARD  # ทิศเดินหน้าของล้อขวา M3/M4 กลับค่านี้ถ้าทั้งฝั่งหมุนย้อน
