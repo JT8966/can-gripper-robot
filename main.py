@@ -1,5 +1,5 @@
 # หุ่นคีบกระป๋อง · MOTION:BIT Pro
-# เริ่มอ่านที่ run_route() เพื่อดูลำดับงาน หรือแก้ค่ามุม ระยะ และกำลังล้อที่ต้นไฟล์
+# เริ่มอ่านที่ run_match() เพื่อดูลำดับภารกิจ หรือแก้ค่ามุม ระยะ และกำลังล้อที่ต้นไฟล์
 
 # S1 หมุนต่อเนื่อง ตั้งให้หมุนซ้ายเพื่อยก ถ้าทดสอบแล้วทิศกลับ ให้สลับ 75 กับ 105
 RACK_UP_COMMAND = 75
@@ -106,6 +106,19 @@ def color_name(color: number):
     if color == YELLOW:
         return "YELLOW"
     return "?"
+
+
+# ----- ภารกิจแข่งขัน อปท. เดลิเวอรี: 3 นาทีต่อรอบ วัตถุ 3 สี x 2 ชิ้น -----
+MATCH_MS = 180000  # เวลาแข่งขันต่อรอบ
+MATCH_MARGIN_MS = 45000  # กันเวลาไว้สำหรับทริปสุดท้ายและเดินกลับ FINISH
+CANS_TOTAL = 6
+PLACE_RAISE_MS = {GREEN: 500, YELLOW: 650, RED: 800}  # ยกให้พ้นขอบแท่นสูง 50/100/150 มม. ต้องจูนหน้างาน
+RELEASE_MS = 400
+# ชุดคำสั่งเส้นทาง ("F", ms) เดินหน้า ("B", ms) ถอย ("L", deg) หมุนซ้าย ("R", deg) หมุนขวา
+# ต้องวัด ms/องศาบนสนามจริงก่อนแข่ง ปล่อยว่างไว้ = หุ่นหยุดและขึ้น ✗ แทนที่จะวิ่งเดา
+DELIVER_ROUTE = {GREEN: [], YELLOW: [], RED: []}  # จากจุดคีบไปแท่นสีที่ตรงกัน
+RETURN_ROUTE = {GREEN: [], YELLOW: [], RED: []}  # จากแท่นสีกลับจุดคีบถัดไป
+FINISH_ROUTE = []  # จากจุดคีบหลังครบ 6 ชิ้น ผ่าน Check Point กลับ FINISH
 
 
 def drive_sides(left: MotionBitMotorDirection, right: MotionBitMotorDirection, trim: number = 0):  # ขับล้อแยกทิศซ้าย–ขวา โดย trim คือกำลังที่ผ่อนด้านหนึ่ง
@@ -280,6 +293,71 @@ def find_cans():
     return 0
 
 
+# เดินตรงตามเวลาที่จูนไว้โดยใช้เข็มทิศคุมแนว เหมือนช่วงเดินตรงใน find_cans
+def drive_straight(milliseconds: number):
+    if stopped or milliseconds <= 0:
+        return
+    target = input.compass_heading()
+    if target < 0 or target >= 360:
+        return
+    deadline = input.running_time() + milliseconds
+    trim = 0
+    while not stopped and input.running_time() < deadline:
+        heading = input.compass_heading()
+        if heading < 0 or heading >= 360:
+            break
+        error = heading_error(target, heading)
+        amount = min(80, 3 * max(0, abs(error) - 2))
+        desired = amount if error > 0 else -amount
+        trim += max(-16, min(16, desired - trim))
+        drive_sides(LEFT, RIGHT, trim)
+        basic.pause(65)
+    stop_wheels()
+
+
+# หมุนอยู่กับที่ตามองศา ใช้เพดาน 5 วินาทีเหมือนการหมุน 90° ใน find_cans
+def turn_in_place(degrees: number):
+    if stopped or degrees == 0:
+        return
+    start = input.compass_heading()
+    if start < 0 or start >= 360:
+        return
+    target = (start + degrees) % 360
+    deadline = input.running_time() + 5000
+    while not stopped and input.running_time() < deadline:
+        heading = input.compass_heading()
+        if heading < 0 or heading >= 360:
+            break
+        error = heading_error(target, heading)
+        if abs(error) <= TURN_TOLERANCE_DEG:
+            break
+        if error > 0:
+            drive_sides(LEFT, opposite(RIGHT))
+        else:
+            drive_sides(opposite(LEFT), RIGHT)
+        basic.pause(10)
+    stop_wheels()
+
+
+def run_steps(steps):
+    for action, value in steps:
+        if stopped:
+            return False
+        if action == "F":
+            drive_straight(value)
+        elif action == "B":
+            drive_sides(opposite(LEFT), opposite(RIGHT))
+            basic.pause(value)
+            stop_wheels()
+        elif action == "R":
+            turn_in_place(value)
+        elif action == "L":
+            turn_in_place(-value)
+        else:
+            return False
+    return not stopped
+
+
 # S1 หมุนตามเวลาที่ตั้งแล้วรับค่า 90 เพื่อหยุด
 def move_rack(command: number, duration: number):
     if stopped or duration <= 0:
@@ -295,8 +373,32 @@ def set_grip(left: number, right: number):
     motionbit.set_servo_position(MotionBitServoChannel.S3, right)
 
 
+# ยกให้พ้นขอบแท่นตามสี เปิดวงคีบปล่อยกระป๋องลงหลุม แล้วลดรางกลับ
+def place_can(color: number):
+    global arm_cycle_incomplete
+    raise_ms = PLACE_RAISE_MS.get(color, 0)
+    if stopped or raise_ms <= 0:
+        return False
+    arm_cycle_incomplete = True
+    motionbit.set_servo_position(MotionBitServoChannel.S1, RACK_UP_COMMAND)
+    basic.pause(raise_ms)
+    if stopped:
+        return False
+    set_grip(GRIP_LEFT_OPEN, GRIP_RIGHT_OPEN)
+    basic.pause(RELEASE_MS)
+    motionbit.set_servo_position(MotionBitServoChannel.S1, RACK_DOWN_COMMAND)
+    basic.pause(raise_ms)
+    motionbit.set_servo_position(MotionBitServoChannel.S1, 90)
+    if stopped:
+        return False
+    arm_cycle_incomplete = False
+    return True
+
+
 def pick_cans():
     global right_can_color, arm_cycle_incomplete, color_sensor_ready
+    if arm_cycle_incomplete:
+        return False  # กลไกค้างกลางลำดับ ต้อง RESET ก่อน
     found = find_cans()
     stop_wheels()
     if not found or stopped:
@@ -329,16 +431,41 @@ def pick_cans():
     return True
 
 
-# เมื่อคีบแล้ว จอแสดงสีกระป๋องขวา รถจอดถือไว้จนกว่าจะมีเส้นทางไปสถานี
-def run_route():
-    if arm_cycle_incomplete:
+# หนึ่งทริป: ค้นหาและคีบกระป๋อง แล้ววิ่งไปแท่นสีที่ตรงกันและปล่อยลงหลุม
+def deliver_trip():
+    global right_can_color
+    right_can_color = 0  # อ่านสีใหม่ทุกทริป เพราะกระป๋องแต่ละใบสีไม่เหมือนกัน
+    if not pick_cans():
         return False
-    if stopped:
+    color = right_can_color
+    if not DELIVER_ROUTE.get(color):
+        return False  # เส้นทางของสีนี้ยังไม่ถูกจูน
+    if not run_steps(DELIVER_ROUTE[color]):
         return False
-    if not right_can_color and not pick_cans():
+    return place_can(color)
+
+
+# ภารกิจเต็ม: รับ–ส่ง 6 ชิ้น แล้วผ่าน Check Point กลับ FINISH ภายในเวลาแข่ง
+def run_match():
+    if arm_cycle_incomplete or stopped:
         return False
-    basic.show_string("R " + color_name(right_can_color))
-    return not stopped
+    start = input.running_time()
+    placed = 0
+    while placed < CANS_TOTAL and not stopped:
+        if input.running_time() - start >= MATCH_MS - MATCH_MARGIN_MS:
+            break
+        if not deliver_trip():
+            return False
+        color = right_can_color
+        placed += 1
+        serial.write_line("PLACED " + str(placed) + " " + color_name(color))
+        if placed >= CANS_TOTAL:
+            break
+        if not RETURN_ROUTE.get(color) or not run_steps(RETURN_ROUTE[color]):
+            return False  # ต้องมีเส้นทางกลับจุดรับ ไม่งั้นทริปถัดไปจะออกจากที่ผิด
+    if placed < CANS_TOTAL or stopped or not FINISH_ROUTE:
+        return False
+    return run_steps(FINISH_ROUTE)
 
 
 # กด A เพื่อเริ่มหนึ่งรอบ ตัวแปร busy กันการกดซ้ำ จอ ✓ เมื่อจบลำดับ หรือ ✗ เมื่อหยุดก่อนจบ
@@ -350,7 +477,7 @@ def on_button_pressed_a():
     busy = True
     try:
         basic.clear_screen()
-        done = run_route()
+        done = run_match()
         if done:
             basic.show_icon(IconNames.YES)
         else:

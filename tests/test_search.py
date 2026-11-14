@@ -92,15 +92,13 @@ class SearchTest(unittest.TestCase):
             if robot.wheels[0][0] == 1:
                 robot.echo = 580
         robot.tick = arrive
-        robot.buttons["A"]()
+        self.assertFalse(robot.env["pick_cans"]())
         self.assertEqual(robot.echo, 580)
-        self.assertEqual(robot.icon, 0)
         self.assertEqual(robot.wheels, [(0, 0)] * 4)
         self.assertEqual(robot.servos, [(2, 45), (3, 45)])
         robot.sensor_present = True
-        robot.buttons["A"]()
+        self.assertTrue(robot.env["pick_cans"]())
         self.assertTrue(robot.env["color_sensor_ready"])
-        self.assertEqual(robot.icon, 1)
 
     def test_rgb_samples(self):
         robot = Robot()
@@ -117,8 +115,7 @@ class SearchTest(unittest.TestCase):
         for drift, turn_step in [(15, 15), (-15, 15), (15, 16)]:
             with self.subTest(drift=drift, turn_step=turn_step):
                 robot = Robot()
-                self.assertEqual((robot.icon, robot.ms, robot.servos),
-                                 (1, 1000, [(2, 45), (3, 45)]))
+                self.assertEqual((robot.ms, robot.servos), (1000, [(2, 45), (3, 45)]))
                 reverse_times, turns = [], []
                 straight_ms = progress = previous_trim = 0
                 drifted = corrected = False
@@ -159,12 +156,12 @@ class SearchTest(unittest.TestCase):
                         self.fail("stopped mid-turn")
 
                 robot.tick = tick
-                robot.buttons["A"]()
+                self.assertTrue(robot.env["pick_cans"]())
                 self.assertTrue(corrected)
                 self.assertEqual(reverse_times, [50, 50])
                 self.assertEqual(turns, [80, 170] if turn_step == 15 else [86, 182])
                 self.assertEqual(robot.servos[2:], [(2, 10), (3, 10), (1, 75), (1, 90)])
-                self.assertEqual(robot.icon, 1)
+                self.assertEqual(robot.wheels, [(0, 0)] * 4)
 
     def test_alignment(self):
         cases = [(31 ^ (1 << i), 1 if i <= 2 else -1, "recover") for i in range(5)]
@@ -194,40 +191,29 @@ class SearchTest(unittest.TestCase):
                         robot.echo = 580
 
                 robot.tick = tick
-                robot.buttons["A"]()
+                found = robot.env["pick_cans"]()
                 self.assertTrue(aligned)
-                self.assertEqual(robot.icon, int(action in ("recover", "turn")))
+                self.assertEqual(found, action in ("recover", "turn"))
                 self.assertEqual(robot.wheels, [(0, 0)] * 4)
 
-    def test_remembers_can_color(self):
-        for color in [1, 2, 3, 4]:
-            with self.subTest(color=color):
-                robot = Robot()
-                robot.can_color = color
-                robot.echo = 580
-                robot.env.update(GRIP_RIGHT_CLOSED=60, GRIP_LEFT_CLOSED=70)
-                robot.buttons["A"]()
-                self.assertEqual(robot.env["right_can_color"], color)
-                self.assertEqual(robot.servos[2:], [(2, 70), (3, 60), (1, 75), (1, 90)])
-                self.assertEqual(robot.wheels, [(0, 0)] * 4)
-                robot.buttons["B"]()
-                previous = robot.servos[:]
-                robot.buttons["A"]()
-                self.assertEqual(robot.servos, previous)
-                self.assertEqual(robot.sensor_probes, [0])
+    def test_place_release_sequence(self):
+        robot = Robot()
+        self.assertTrue(robot.env["place_can"](4))
+        self.assertEqual(robot.servos[2:], [(1, 75), (2, 45), (3, 45), (1, 105), (1, 90)])
+        self.assertFalse(robot.env["arm_cycle_incomplete"])
+        self.assertFalse(robot.env["place_can"](0))
+        self.assertEqual(robot.servos[2:], [(1, 75), (2, 45), (3, 45), (1, 105), (1, 90)])
 
     def test_cancel_during_pickup_lift_requires_reset(self):
         robot = Robot()
         robot.echo = 580
         robot.env.update(RACK_UP_MS=300)
         robot.tick = lambda delay: robot.buttons["B"]() if robot.servos[-1] == (1, 75) else None
-        robot.buttons["A"]()
-        self.assertEqual(robot.icon, 0)
+        self.assertFalse(robot.env["pick_cans"]())
         self.assertEqual(robot.wheels, [(0, 0)] * 4)
         previous = robot.servos[:]
         robot.env["find_cans"] = lambda: self.fail("searched again after interrupted lift")
-        robot.buttons["A"]()
-        self.assertEqual(robot.icon, 0)
+        self.assertFalse(robot.env["pick_cans"]())
         self.assertEqual(robot.servos, previous)
 
     def test_unrecognized_or_changing_can_color(self):
@@ -237,8 +223,7 @@ class SearchTest(unittest.TestCase):
                 robot.echo = 580
                 readings = iter(samples)
                 robot.env["read_color"] = lambda: next(readings)
-                robot.buttons["A"]()
-                self.assertEqual(robot.icon, 0)
+                self.assertFalse(robot.env["pick_cans"]())
                 self.assertEqual(robot.env["right_can_color"], 0)
                 self.assertEqual(robot.servos, [(2, 45), (3, 45)])
 
@@ -246,10 +231,29 @@ class SearchTest(unittest.TestCase):
         robot = Robot()
         robot.mask = 0
         robot.tick = lambda delay: robot.buttons["B"]() if robot.wheels[0][0] == -1 else None
-        robot.buttons["A"]()
+        self.assertFalse(robot.env["pick_cans"]())
         self.assertEqual(robot.wheels, [(0, 0)] * 4)
         self.assertEqual(robot.servos[-1:], [(1, 90)])
-        self.assertEqual(robot.icon, 0)
+
+    def test_match_needs_calibrated_routes(self):
+        robot = Robot()
+        robot.echo = 580
+        self.assertFalse(robot.env["run_match"]())
+        self.assertEqual(robot.env["right_can_color"], 1)
+        self.assertEqual(robot.servos[2:], [(2, 10), (3, 10), (1, 75), (1, 90)])
+        self.assertNotIn((1, 105), robot.servos)
+
+    def test_match_full_run(self):
+        robot = Robot()
+        robot.echo = 580
+        robot.env["DELIVER_ROUTE"] = {1: [("F", 65)], 2: [], 3: [], 4: []}
+        robot.env["RETURN_ROUTE"] = {1: [("F", 65)], 2: [], 3: [], 4: []}
+        robot.env["FINISH_ROUTE"] = [("F", 65)]
+        self.assertTrue(robot.env["run_match"]())
+        self.assertEqual(robot.env["right_can_color"], 1)
+        self.assertEqual(robot.servos.count((1, 105)), 6)
+        self.assertEqual(robot.servos.count((2, 10)), 6)
+        self.assertEqual(robot.wheels, [(0, 0)] * 4)
 
 
 if __name__ == "__main__":
