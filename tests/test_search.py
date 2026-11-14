@@ -246,9 +246,9 @@ class SearchTest(unittest.TestCase):
     def test_match_full_run(self):
         robot = Robot()
         robot.echo = 580
-        robot.env["DELIVER_ROUTE"] = {1: [("F", 65)], 2: [], 3: [], 4: []}
-        robot.env["RETURN_ROUTE"] = {1: [("F", 65)], 2: [], 3: [], 4: []}
-        robot.env["FINISH_ROUTE"] = [("F", 65)]
+        robot.env["red_deliver_route"] = lambda: [["F", 65]]
+        robot.env["red_return_route"] = lambda: [["F", 65]]
+        robot.env["finish_route"] = lambda: [["F", 65]]
         self.assertTrue(robot.env["run_match"]())
         self.assertEqual(robot.env["right_can_color"], 1)
         self.assertEqual(robot.servos.count((1, 105)), 6)

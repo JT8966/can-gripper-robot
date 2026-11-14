@@ -112,13 +112,66 @@ def color_name(color: number):
 MATCH_MS = 180000  # เวลาแข่งขันต่อรอบ
 MATCH_MARGIN_MS = 45000  # กันเวลาไว้สำหรับทริปสุดท้ายและเดินกลับ FINISH
 CANS_TOTAL = 6
-PLACE_RAISE_MS = {GREEN: 500, YELLOW: 650, RED: 800}  # ยกให้พ้นขอบแท่นสูง 50/100/150 มม. ต้องจูนหน้างาน
 RELEASE_MS = 400
 # ชุดคำสั่งเส้นทาง ("F", ms) เดินหน้า ("B", ms) ถอย ("L", deg) หมุนซ้าย ("R", deg) หมุนขวา
 # ต้องวัด ms/องศาบนสนามจริงก่อนแข่ง ปล่อยว่างไว้ = หุ่นหยุดและขึ้น ✗ แทนที่จะวิ่งเดา
-DELIVER_ROUTE = {GREEN: [], YELLOW: [], RED: []}  # จากจุดคีบไปแท่นสีที่ตรงกัน
-RETURN_ROUTE = {GREEN: [], YELLOW: [], RED: []}  # จากแท่นสีกลับจุดคีบถัดไป
-FINISH_ROUTE = []  # จากจุดคีบหลังครบ 6 ชิ้น ผ่าน Check Point กลับ FINISH
+def green_deliver_route():
+    return []
+
+
+def yellow_deliver_route():
+    return []
+
+
+def red_deliver_route():
+    return []
+
+
+def green_return_route():
+    return []
+
+
+def yellow_return_route():
+    return []
+
+
+def red_return_route():
+    return []
+
+
+def finish_route():
+    return []
+
+
+# ระยะยก S1 ตามความสูงแท่น 50/100/150 มม. ต้องจูนหน้างาน
+def place_raise_ms(color: number):
+    if color == GREEN:
+        return 500
+    if color == YELLOW:
+        return 650
+    if color == RED:
+        return 800
+    return 0
+
+
+def deliver_route(color: number):
+    if color == GREEN:
+        return green_deliver_route()
+    if color == YELLOW:
+        return yellow_deliver_route()
+    if color == RED:
+        return red_deliver_route()
+    return []
+
+
+def return_route(color: number):
+    if color == GREEN:
+        return green_return_route()
+    if color == YELLOW:
+        return yellow_return_route()
+    if color == RED:
+        return red_return_route()
+    return []
 
 
 def drive_sides(left: MotionBitMotorDirection, right: MotionBitMotorDirection, trim: number = 0):  # ขับล้อแยกทิศซ้าย–ขวา โดย trim คือกำลังที่ผ่อนด้านหนึ่ง
@@ -340,9 +393,11 @@ def turn_in_place(degrees: number):
 
 
 def run_steps(steps):
-    for action, value in steps:
+    for step in steps:
         if stopped:
             return False
+        action = step[0]
+        value = step[1]
         if action == "F":
             drive_straight(value)
         elif action == "B":
@@ -376,7 +431,7 @@ def set_grip(left: number, right: number):
 # ยกให้พ้นขอบแท่นตามสี เปิดวงคีบปล่อยกระป๋องลงหลุม แล้วลดรางกลับ
 def place_can(color: number):
     global arm_cycle_incomplete
-    raise_ms = PLACE_RAISE_MS.get(color, 0)
+    raise_ms = place_raise_ms(color)
     if stopped or raise_ms <= 0:
         return False
     arm_cycle_incomplete = True
@@ -438,9 +493,10 @@ def deliver_trip():
     if not pick_cans():
         return False
     color = right_can_color
-    if not DELIVER_ROUTE.get(color):
+    route = deliver_route(color)
+    if not route:
         return False  # เส้นทางของสีนี้ยังไม่ถูกจูน
-    if not run_steps(DELIVER_ROUTE[color]):
+    if not run_steps(route):
         return False
     return place_can(color)
 
@@ -461,11 +517,13 @@ def run_match():
         serial.write_line("PLACED " + str(placed) + " " + color_name(color))
         if placed >= CANS_TOTAL:
             break
-        if not RETURN_ROUTE.get(color) or not run_steps(RETURN_ROUTE[color]):
+        route = return_route(color)
+        if not route or not run_steps(route):
             return False  # ต้องมีเส้นทางกลับจุดรับ ไม่งั้นทริปถัดไปจะออกจากที่ผิด
-    if placed < CANS_TOTAL or stopped or not FINISH_ROUTE:
+    finish = finish_route()
+    if placed < CANS_TOTAL or stopped or not finish:
         return False
-    return run_steps(FINISH_ROUTE)
+    return run_steps(finish)
 
 
 # กด A เพื่อเริ่มหนึ่งรอบ ตัวแปร busy กันการกดซ้ำ จอ ✓ เมื่อจบลำดับ หรือ ✗ เมื่อหยุดก่อนจบ
