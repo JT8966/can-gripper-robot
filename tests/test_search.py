@@ -25,7 +25,7 @@ class Robot:
             number=float, DigitalPin=NS(**{f"P{i}": i for i in range(17)}),
             MotionBitMotorChannel=NS(ALL=0, M1=1, M2=2, M3=3, M4=4),
             MotionBitMotorDirection=NS(FORWARD=1, BACKWARD=-1),
-            MotionBitServoChannel=NS(S1=1, S2=2, S4=4, S5=5),
+            MotionBitServoChannel=NS(S1=1, S2=2, S3=3),
             Button=NS(A="A", B="B"), IconNames=NS(YES=1, NO=0),
             input=NS(on_button_pressed=self.buttons.__setitem__, running_time=lambda: self.ms,
                      compass_heading=lambda: self.heading),
@@ -103,7 +103,7 @@ class SearchTest(unittest.TestCase):
             with self.subTest(drift=drift, turn_step=turn_step):
                 robot = Robot()
                 self.assertEqual((robot.icon, robot.ms, robot.servos),
-                                 (1, 1065, [(1, 90), (2, 90), (4, 10), (5, 20)]))
+                                 (1, 1065, [(2, 45), (3, 45)]))
                 reverse_times, turns = [], []
                 straight_ms = progress = previous_trim = 0
                 drifted = corrected = False
@@ -148,10 +148,8 @@ class SearchTest(unittest.TestCase):
                 self.assertTrue(corrected)
                 self.assertEqual(reverse_times, [50, 50])
                 self.assertEqual(turns, [80, 170] if turn_step == 15 else [86, 182])
-                self.assertEqual(robot.servos[4:], [
-                    (4, 10), (5, 20), (1, 75), (1, 90), (4, 20), (5, 20), (1, 105), (1, 90),
-                    (1, 75), (1, 90), (2, 105), (2, 90), (4, 10), (5, 20), (2, 75), (2, 90),
-                    (1, 105), (1, 90)])
+                self.assertEqual(robot.servos[2:], [
+                    (2, 45), (3, 45), (1, 75), (1, 90), (1, 105), (1, 90), (3, 45), (2, 45)])
                 self.assertEqual(robot.icon, 1)
 
     def test_alignment(self):
@@ -194,43 +192,40 @@ class SearchTest(unittest.TestCase):
                 robot.pick_color = color
                 robot.echo = 580
                 robot.env.update(GRIP_RIGHT_CLOSED=60, GRIP_LEFT_CLOSED=70,
-                                 RACK_UP_MS=300, RACK_DOWN_MS=300, ROTATE_RIGHT_MS=180,
-                                 ROTATE_RETURN_MS=160)
+                                 RACK_UP_MS=300, RACK_DOWN_MS=300)
                 robot.buttons["A"]()
                 self.assertGreaterEqual(robot.carry_steps, 7)
                 self.assertEqual(robot.icon, 1)
-                cycle = [(4, 10), (5, 20), (1, 75), (1, 90),
-                    (4, 60), (5, 70), (1, 105), (1, 90), (1, 75), (1, 90), (2, 105), (2, 90),
-                    (4, 10), (5, 20), (2, 75), (2, 90), (1, 105), (1, 90)]
-                self.assertEqual(robot.servos[4:], cycle)
+                cycle = [(2, 70), (3, 60), (1, 75), (1, 90),
+                         (1, 105), (1, 90), (3, 45), (2, 45)]
+                self.assertEqual(robot.servos[2:], cycle)
                 robot.carry_steps = 0
                 robot.buttons["A"]()
                 self.assertEqual(robot.icon, 1)
-                self.assertEqual(robot.servos[4:], cycle * 2)
+                self.assertEqual(robot.servos[2:], cycle * 2)
                 self.assertEqual(robot.sensor_probes, 1)
 
-    def test_cancel_during_first_lowering_requires_reset(self):
+    def test_cancel_during_pickup_lift_requires_reset(self):
         robot = Robot()
         robot.echo = 580
-        robot.env.update(RACK_DOWN_MS=300)
+        robot.env.update(RACK_UP_MS=300)
         robot.tick = lambda delay: robot.buttons["B"]() if robot.servos[-1] == (1, 75) else None
         robot.buttons["A"]()
         self.assertEqual(robot.icon, 0)
         self.assertEqual(robot.wheels, [(0, 0)] * 4)
         previous = robot.servos[:]
-        robot.env["drive_to_station"] = lambda delivering: self.fail("searched again with rack lowered")
+        robot.env["drive_to_station"] = lambda delivering: self.fail("searched again after interrupted lift")
         robot.buttons["A"]()
         self.assertEqual(robot.icon, 0)
         self.assertEqual(robot.servos, previous)
 
     def test_cancel_during_drop(self):
-        for command, delay in [((1, 75), 300), ((2, 105), 180), ((4, 10), 400),
-                               ((5, 20), 400), ((2, 75), 160)]:
+        for command, delay in [((1, 105), 300), ((3, 45), 400), ((2, 45), 400)]:
             with self.subTest(command=command):
                 robot = Robot()
                 robot.echo = 580
                 robot.env.update(GRIP_RIGHT_CLOSED=60, GRIP_LEFT_CLOSED=70, RACK_DOWN_MS=300,
-                                 RACK_UP_MS=300, ROTATE_RIGHT_MS=180, ROTATE_RETURN_MS=160)
+                                 RACK_UP_MS=300)
                 before_stop = []
 
                 def tick(pause_ms):
@@ -244,8 +239,8 @@ class SearchTest(unittest.TestCase):
                 self.assertTrue(before_stop)
                 self.assertEqual(robot.icon, 0)
                 after_stop = robot.servos[len(before_stop):]
-                self.assertEqual(after_stop[:2], [(1, 90), (2, 90)])
-                self.assertTrue(all(cmd in [(1, 90), (2, 90)] for cmd in after_stop))
+                self.assertEqual(after_stop[:1], [(1, 90)])
+                self.assertTrue(all(cmd == (1, 90) for cmd in after_stop))
                 self.assertEqual(robot.wheels, [(0, 0)] * 4)
                 previous = robot.servos[:]
                 robot.buttons["A"]()
@@ -259,7 +254,7 @@ class SearchTest(unittest.TestCase):
         robot.buttons["A"]()
         self.assertEqual(robot.icon, 0)
         self.assertEqual(robot.env["carrying_color"], robot.pick_color)
-        self.assertEqual([p for p in robot.servos if p[0] in (4, 5)][-2:], [(4, 60), (5, 70)])
+        self.assertEqual([p for p in robot.servos if p[0] in (2, 3)][-2:], [(2, 70), (3, 60)])
         robot.tick = lambda delay: None
         robot.buttons["A"]()
         self.assertGreaterEqual(robot.carry_steps, 7)
@@ -280,7 +275,7 @@ class SearchTest(unittest.TestCase):
         robot.tick = lambda delay: robot.buttons["B"]() if robot.wheels[0][0] == -1 else None
         robot.buttons["A"]()
         self.assertEqual(robot.wheels, [(0, 0)] * 4)
-        self.assertEqual(robot.servos[-2:], [(1, 90), (2, 90)])
+        self.assertEqual(robot.servos, [(2, 45), (3, 45), (1, 90)])
         self.assertEqual(robot.icon, 0)
 
 

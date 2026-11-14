@@ -1,21 +1,17 @@
 # หุ่นคีบกระป๋อง · MOTION:BIT Pro
 # เริ่มอ่านที่ run_route() เพื่อดูลำดับงาน หรือแก้ค่ามุม ระยะ และกำลังล้อที่ต้นไฟล์
 
-# S1 ยก–ลดราง และ S2 หมุนที่คีบขวา เป็นเซอร์โว 360° ค่า 90 คือหยุด ค่าที่ต่างจาก 90 กำหนดทิศและความเร็ว
-RACK_DOWN_COMMAND = 75
-RACK_DOWN_MS = 500  # S1 เวลาจากท่ายกถึงระดับคีบ (ms)
-RACK_UP_COMMAND = 105
-RACK_UP_MS = 500  # S1 เวลาจากระดับคีบกลับขึ้นถึงท่าขน (ms)
-ROTATE_RIGHT_COMMAND = 105
-ROTATE_RIGHT_MS = 500  # S2 เวลาหมุนวงขวาจากท่าขนไปจุดปล่อย (ms)
-# S2 คืนท่าหลังปล่อย ใช้ความเร็วตรงข้ามรอบค่าหยุด 90
-ROTATE_RETURN_COMMAND = 180 - ROTATE_RIGHT_COMMAND
-ROTATE_RETURN_MS = 500  # S2 เวลาหมุนกลับถึงท่าเริ่ม (ms) ปรับแยกจากขาไป
-# S4 ขวาและ S5 ซ้ายเป็นเซอร์โว 180° ตัวเลขด้านล่างคือมุมปากคีบแต่ละข้าง
-GRIP_RIGHT_OPEN = 10  # S4 มุมอ้าขวา (องศา)
-GRIP_LEFT_OPEN = 20  # S5 มุมอ้าซ้ายชั่วคราว ใส่มุมอ้าที่วัดได้ตรงนี้
-GRIP_RIGHT_CLOSED = 20  # S4 มุมหุบขวาที่ยึดกระป๋องได้ (องศา)
-GRIP_LEFT_CLOSED = 20  # S5 มุมหุบซ้าย (องศา) ตอนนี้เท่ามุมอ้า ก้ามซ้ายจึงค้างที่เดิม
+# S1 หมุนต่อเนื่อง ตั้งให้หมุนซ้ายเพื่อยก ถ้าทดสอบแล้วทิศกลับ ให้สลับ 75 กับ 105
+RACK_UP_COMMAND = 75
+RACK_UP_MS = 500
+RACK_DOWN_COMMAND = 105
+RACK_DOWN_MS = 500
+# S2 กางไปทางซ้าย S3 กางไปทางขวา มุมของแต่ละท่าอ้างอิงจากเพลาของตัวนั้น
+# มุมกางและหุบที่ระบุเท่ากัน วงคีบจึงค้างที่ 45° จนกว่าจะปรับมุมหุบ
+GRIP_LEFT_OPEN = 45
+GRIP_LEFT_CLOSED = 45
+GRIP_RIGHT_OPEN = 45
+GRIP_RIGHT_CLOSED = 45
 SPEED = 255  # กำลังล้อพื้นฐาน 0–255 ค่า 255 ใช้ตอนออกตัว ถอย และหมุน
 LEFT = MotionBitMotorDirection.FORWARD  # ทิศเดินหน้าของล้อซ้าย M1/M2 กลับค่านี้ถ้าทั้งฝั่งหมุนย้อน
 RIGHT = MotionBitMotorDirection.FORWARD  # ทิศเดินหน้าของล้อขวา M3/M4 กลับค่านี้ถ้าทั้งฝั่งหมุนย้อน
@@ -36,13 +32,12 @@ arm_cycle_incomplete = False  # ถ้าหยุดกลางลำดับ
 def stop_wheels():
     motionbit.brake_motor(MotionBitMotorChannel.ALL)
 
-# กด B ระหว่างทำงานเพื่อยกเลิกรอบ เบรกล้อ และหยุด S1/S2 ส่วน S4/S5 ค้างมุมล่าสุด
+# กด B เพื่อเบรกล้อและหยุดราง S1 ส่วน S2/S3 ค้างมุมล่าสุดเพื่อประคองกระป๋อง
 def on_button_pressed_b():
     global stopped
     stopped = True
     stop_wheels()
     motionbit.set_servo_position(MotionBitServoChannel.S1, 90)
-    motionbit.set_servo_position(MotionBitServoChannel.S2, 90)
 input.on_button_pressed(Button.B, on_button_pressed_b)
 
 # ส่งคำสั่งตั้งค่า TCS3472 ผ่าน I²C โดยส่งหมายเลขรีจิสเตอร์และค่าที่จะเขียนเป็นคู่
@@ -294,19 +289,18 @@ def drive_to_station(delivering: bool):
     return 0
 
 
-# ขับเซอร์โว 360° ตามเวลาที่กำหนดแล้วส่งค่า 90 เพื่อหยุด ถ้าเวลาเป็น 0 ให้ข้ามขั้นตอนนี้
-def run_timed_servo(channel: MotionBitServoChannel, command: number, duration: number):
+# S1 หมุนตามเวลาที่ตั้งแล้วรับค่า 90 เพื่อหยุด
+def move_rack(command: number, duration: number):
     if stopped or duration <= 0:
         return
-    motionbit.set_servo_position(channel, command)
+    motionbit.set_servo_position(MotionBitServoChannel.S1, command)
     basic.pause(duration)
-    motionbit.set_servo_position(channel, 90)
+    motionbit.set_servo_position(MotionBitServoChannel.S1, 90)
 
 
-# วงคีบขวา S4 และวงคีบซ้าย S5 โอบกระป๋องคนละใบ ใช้มุมของแต่ละวงในขั้นตอนเดียวกัน
-def set_grip(right: number, left: number):
-    motionbit.set_servo_position(MotionBitServoChannel.S4, right)
-    motionbit.set_servo_position(MotionBitServoChannel.S5, left)
+def set_grip(left: number, right: number):
+    motionbit.set_servo_position(MotionBitServoChannel.S2, left)
+    motionbit.set_servo_position(MotionBitServoChannel.S3, right)
 
 
 # งานหนึ่งรอบ รับจากพื้นสีใด นำไปวางบนแถบสีเดียวกันอีกจุด
@@ -317,20 +311,16 @@ def run_route():
     if not color_sensor_ready or stopped:
         return False
     if carrying_color == 0:
-        set_grip(GRIP_RIGHT_OPEN, GRIP_LEFT_OPEN)
         picked = drive_to_station(False)
         stop_wheels()
         if not picked or stopped:
             return False
-        arm_cycle_incomplete = True  # ล็อกก่อนลดรางครั้งแรก แม้ยังไม่ได้บันทึกสีของกระป๋อง
-        run_timed_servo(MotionBitServoChannel.S1, RACK_DOWN_COMMAND, RACK_DOWN_MS)
-        if stopped:
-            return False
-        set_grip(GRIP_RIGHT_CLOSED, GRIP_LEFT_CLOSED)
+        arm_cycle_incomplete = True
+        set_grip(GRIP_LEFT_CLOSED, GRIP_RIGHT_CLOSED)
         carrying_color = picked
         left_pickup = False
         basic.pause(550)
-        run_timed_servo(MotionBitServoChannel.S1, RACK_UP_COMMAND, RACK_UP_MS)
+        move_rack(RACK_UP_COMMAND, RACK_UP_MS)
         if stopped:
             return False
         arm_cycle_incomplete = False  # ยกเสร็จแล้ว กด B ตอนรถวิ่งขนแล้วกด A เพื่อขนต่อได้
@@ -339,23 +329,19 @@ def run_route():
     if not arrived or stopped:
         return False
     arm_cycle_incomplete = True
-    run_timed_servo(MotionBitServoChannel.S1, RACK_DOWN_COMMAND, RACK_DOWN_MS)
-    run_timed_servo(MotionBitServoChannel.S2, ROTATE_RIGHT_COMMAND, ROTATE_RIGHT_MS)
+    move_rack(RACK_DOWN_COMMAND, RACK_DOWN_MS)
     if stopped:
         return False
     # ปล่อยใบขวาก่อน ถ้ากด B ระหว่างรอ วงซ้ายจะยังคีบใบที่สองไว้
-    motionbit.set_servo_position(MotionBitServoChannel.S4, GRIP_RIGHT_OPEN)
+    motionbit.set_servo_position(MotionBitServoChannel.S3, GRIP_RIGHT_OPEN)
     basic.pause(400)
     if stopped:
         return False
-    motionbit.set_servo_position(MotionBitServoChannel.S5, GRIP_LEFT_OPEN)
+    motionbit.set_servo_position(MotionBitServoChannel.S2, GRIP_LEFT_OPEN)
     basic.pause(400)
-    if ROTATE_RIGHT_MS > 0 and ROTATE_RIGHT_COMMAND != 90:
-        run_timed_servo(MotionBitServoChannel.S2, ROTATE_RETURN_COMMAND, ROTATE_RETURN_MS)
-    run_timed_servo(MotionBitServoChannel.S1, RACK_UP_COMMAND, RACK_UP_MS)
     if stopped:
         return False
-    # ปิดรอบเมื่อคืนชุดคีบเสร็จ ถ้ากด B กลางทางให้จัดท่าจริงก่อนรีเซ็ต
+    # หลังวาง รางอยู่ระดับรับและวงคีบเปิดพร้อมสำหรับรอบถัดไป
     carrying_color = 0
     arm_cycle_incomplete = False
     return True
@@ -377,12 +363,10 @@ def on_button_pressed_a():
     busy = False
 input.on_button_pressed(Button.A, on_button_pressed_a)
 
-# เปิดเครื่องแล้วเบรกล้อ หยุด S1/S2 และตั้งวงคีบขวา 10° ซ้าย 20°
+# เริ่มโดยให้รางอยู่ระดับรับกระป๋อง เปิดเครื่องแล้วสั่งเฉพาะวงคีบ
 stop_wheels()
-motionbit.set_servo_position(MotionBitServoChannel.S1, 90)
-motionbit.set_servo_position(MotionBitServoChannel.S2, 90)
+set_grip(GRIP_LEFT_OPEN, GRIP_RIGHT_OPEN)
 basic.show_icon(IconNames.YES)
-set_grip(GRIP_RIGHT_OPEN, GRIP_LEFT_OPEN)
 basic.pause(1000)
 color_sensor_ready = sensor_ready()
 input.compass_heading()  # เรียกเข็มทิศขณะรถจอด เพื่อให้ปรับเทียบก่อนเริ่มถ้าบอร์ดร้องขอ
