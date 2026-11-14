@@ -22,7 +22,7 @@ NB142_PINS = [DigitalPin.P12, DigitalPin.P13, DigitalPin.P14, DigitalPin.P15, Di
 TURN_DEG = 90  # มุมหมุนขวาเมื่อ NB142 หลุดกรอบ
 TURN_TOLERANCE_DEG = 4  # เผื่อมุมรถไหล 4° สั่งเบรกที่ 86° สำหรับเป้าหมาย 90° เพิ่มค่านี้เพื่อเบรกเร็วขึ้น
 COLOR_ADDRESS = 0x29  # TCS34725 เซ็นเซอร์สีข้างขวา (ต่อตรง I2C ไม่ผ่าน PCA9548A)
-busy = True
+busy = False  # เริ่มด้วย False เพื่อให้ปุ่ม A ใช้ได้เสมอ แม้โปรแกรมตายช่วงบูตก่อนถึงท้ายไฟล์
 stopped = False
 right_can_color = 0  # อ่านกระป๋องในวงขวา S3
 arm_cycle_incomplete = False  # ถ้าหยุดกลางลำดับแขน ต้องจัดกลไกกลับท่าเริ่มแล้วรีเซ็ต
@@ -165,6 +165,7 @@ def object_in_reach():
 
 # หยุดรอวัดระยะซ้ำก่อนอ่านสีจากกระป๋องข้างขวา
 def find_cans():
+    start_time = input.running_time()
     target = input.compass_heading()
     if target < 0 or target >= 360:
         return 0
@@ -178,6 +179,10 @@ def find_cans():
     aligning = False
     direction = 1
     while not stopped:
+        if input.running_time() - start_time > 30000:
+            stop_wheels()
+            serial.write_line("FIND TIMEOUT")
+            return 0
         mask = nb142_mask()
         near = False
         # วัดระยะเมื่อหัวอ่านติดครบ เว้นการยิงเสียงอย่างน้อย 65 มิลลิวินาที แล้วอ่านกรอบซ้ำก่อนสั่งล้อ
@@ -279,6 +284,7 @@ def find_cans():
 def move_rack(command: number, duration: number):
     if stopped or duration <= 0:
         return
+    duration = min(duration, 3000)  # กัน pause นานผิดปกติ
     motionbit.set_servo_position(MotionBitServoChannel.S1, command)
     basic.pause(duration)
     motionbit.set_servo_position(MotionBitServoChannel.S1, 90)
@@ -297,7 +303,10 @@ def pick_cans():
         return False
     # ใช้สีเฉพาะตอนรับกระป๋อง ถ้าตอนเปิดเครื่องยังไม่พบหัวอ่าน ให้ลองอีกครั้งขณะล้อหยุด
     if not color_sensor_ready:
-        color_sensor_ready = check_color_sensor()
+        try:
+            color_sensor_ready = check_color_sensor()
+        except:
+            color_sensor_ready = False
     if not color_sensor_ready or stopped or nb142_mask() != 31:
         return False
     right = read_color()
@@ -337,15 +346,17 @@ def on_button_pressed_a():
     global busy, stopped
     if busy:
         return
-    busy = True
     stopped = False
-    basic.clear_screen()
-    done = run_route()
-    if done:
-        basic.show_icon(IconNames.YES)
-    else:
-        basic.show_icon(IconNames.NO)
-    busy = False
+    busy = True
+    try:
+        basic.clear_screen()
+        done = run_route()
+        if done:
+            basic.show_icon(IconNames.YES)
+        else:
+            basic.show_icon(IconNames.NO)
+    finally:
+        busy = False  # คืนค่าแม้เกิด exception เพื่อไม่ให้ปุ่ม A ล็อกถาวร
 input.on_button_pressed(Button.A, on_button_pressed_a)
 
 # เริ่มโดยให้รางอยู่ระดับรับกระป๋อง เปิดเครื่องแล้วสั่งเฉพาะวงคีบ
@@ -353,10 +364,7 @@ basic.show_icon(IconNames.YES, 0)
 stop_wheels()
 set_grip(GRIP_LEFT_OPEN, GRIP_RIGHT_OPEN)
 basic.pause(1000)
-color_sensor_ready = check_color_sensor()
-if not color_sensor_ready:
-    basic.show_string("I2C")
-input.compass_heading()  # เรียกเข็มทิศขณะรถจอด เพื่อให้ปรับเทียบก่อนเริ่มถ้าบอร์ดร้องขอ
+color_sensor_ready = False  # ตรวจ TCS34725 ตอน pick_cans แทน กันช่วงบูตค้างถ้าเซ็นเซอร์หลุด
 basic.show_leds("""
     . # # # .
     . # . # .

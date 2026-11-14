@@ -118,7 +118,7 @@ class SearchTest(unittest.TestCase):
             with self.subTest(drift=drift, turn_step=turn_step):
                 robot = Robot()
                 self.assertEqual((robot.icon, robot.ms, robot.servos),
-                                 (1, 1065, [(2, 45), (3, 45)]))
+                                 (1, 1000, [(2, 45), (3, 45)]))
                 reverse_times, turns = [], []
                 straight_ms = progress = previous_trim = 0
                 drifted = corrected = False
