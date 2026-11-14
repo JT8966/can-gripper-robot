@@ -21,6 +21,7 @@ class Robot:
         self.sensors_present = sensors_present
         self.sensor_probes = []
         self.icon = None
+        self.display = ""
         self.tick = lambda delay: None
         self.can_colors = [1, 3]
         self.env = dict(
@@ -38,7 +39,8 @@ class Robot:
                     i2c_read_number=self.read_i2c),
             motionbit=NS(run_motor=self.drive, brake_motor=self.brake, set_servo_position=self.servo),
             basic=NS(pause=self.pause, clear_screen=lambda: None, show_string=lambda text: None,
-                     show_icon=lambda icon: setattr(self, "icon", icon)),
+                     show_icon=lambda icon, interval=0: setattr(self, "icon", icon),
+                     show_leds=lambda pattern, interval: setattr(self, "display", pattern)),
             control=NS(wait_micros=lambda delay: None), serial=NS(write_line=lambda text: None),
         )
         exec(compile(SOURCE.read_text(encoding="utf-8"), str(SOURCE), "exec"), self.env)
@@ -99,9 +101,19 @@ class SearchTest(unittest.TestCase):
                 robot = Robot(sensors_present=present, mux_present=mux)
                 self.assertFalse(robot.env["color_sensor_ready"])
                 self.assertEqual(robot.sensor_probes, probes)
+                def arrive(delay):
+                    if robot.wheels[0][0] == 1:
+                        robot.echo = 580
+                robot.tick = arrive
                 robot.buttons["A"]()
+                self.assertEqual(robot.echo, 580)
                 self.assertEqual(robot.icon, 0)
                 self.assertEqual(robot.wheels, [(0, 0)] * 4)
+                self.assertEqual(robot.servos, [(2, 45), (3, 45)])
+                robot.mux_present, robot.sensors_present = True, (True, True)
+                robot.buttons["A"]()
+                self.assertTrue(robot.env["color_sensor_ready"])
+                self.assertEqual(robot.icon, 1)
 
     def test_rgb_samples(self):
         robot = Robot()

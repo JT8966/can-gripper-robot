@@ -73,6 +73,14 @@ def sensor_ready(channel: number):
     return True
 
 
+def check_color_sensors():
+    channel0_ready = sensor_ready(0)
+    channel1_ready = sensor_ready(1)
+    serial.write_line("TCS CH0 " + ("OK" if channel0_ready else "ERROR"))
+    serial.write_line("TCS CH1 " + ("OK" if channel1_ready else "ERROR"))
+    return channel0_ready and channel1_ready
+
+
 RED = 1
 BLUE = 2
 GREEN = 3
@@ -296,10 +304,15 @@ def set_grip(left: number, right: number):
 
 
 def pick_cans():
-    global right_can_color, left_can_color, arm_cycle_incomplete
+    global right_can_color, left_can_color, arm_cycle_incomplete, color_sensor_ready
     found = find_cans()
     stop_wheels()
     if not found or stopped:
+        return False
+    # ใช้สีเฉพาะตอนรับกระป๋อง ถ้าตอนเปิดเครื่องยังไม่พบหัวอ่าน ให้ลองอีกครั้งขณะล้อหยุด
+    if not color_sensor_ready:
+        color_sensor_ready = check_color_sensors()
+    if not color_sensor_ready or stopped or nb142_mask() != 31:
         return False
     right = channel_color(0)
     left = channel_color(1)
@@ -327,7 +340,7 @@ def pick_cans():
 def run_route():
     if arm_cycle_incomplete:
         return False
-    if not color_sensor_ready or stopped:
+    if stopped:
         return False
     if not right_can_color and not pick_cans():
         return False
@@ -355,15 +368,19 @@ def on_button_pressed_a():
 input.on_button_pressed(Button.A, on_button_pressed_a)
 
 # เริ่มโดยให้รางอยู่ระดับรับกระป๋อง เปิดเครื่องแล้วสั่งเฉพาะวงคีบ
+basic.show_icon(IconNames.YES, 0)
 stop_wheels()
 set_grip(GRIP_LEFT_OPEN, GRIP_RIGHT_OPEN)
-basic.show_icon(IconNames.YES)
 basic.pause(1000)
-channel0_ready = sensor_ready(0)
-channel1_ready = sensor_ready(1)
-serial.write_line("TCS CH0 " + ("OK" if channel0_ready else "ERROR"))
-serial.write_line("TCS CH1 " + ("OK" if channel1_ready else "ERROR"))
-color_sensor_ready = channel0_ready and channel1_ready
+color_sensor_ready = check_color_sensors()
+if not color_sensor_ready:
+    basic.show_string("I2C")
 input.compass_heading()  # เรียกเข็มทิศขณะรถจอด เพื่อให้ปรับเทียบก่อนเริ่มถ้าบอร์ดร้องขอ
+basic.show_leds("""
+    . # # # .
+    . # . # .
+    . # # # .
+    . # . # .
+    . # . # .
+""", 0)
 busy = False
-basic.show_string("A" if color_sensor_ready else "I2C")
