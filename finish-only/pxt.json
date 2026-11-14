@@ -1,0 +1,10 @@
+{
+    "name": "finish-only",
+    "description": "Timed four-motor route from START to FINISH",
+    "dependencies": {
+        "core": "*",
+        "pxt-motionbit": "github:CytronTechnologies/pxt-motionbit#v1.2.0"
+    },
+    "files": ["main.py"],
+    "preferredEditor": "pyprj"
+}
