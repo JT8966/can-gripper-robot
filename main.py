@@ -57,10 +57,12 @@ def write_register(reg: number, value: number):
 
 def sensor_ready(channel: number):
     if not select_color_channel(channel):
+        serial.write_line("MUX selection failed CH" + str(channel))
         return False
     pins.i2c_write_number(COLOR_ADDRESS, 0x92, NumberFormat.UINT8_LE, True)
     chip_id = pins.i2c_read_number(COLOR_ADDRESS, NumberFormat.UINT8_LE)
     if chip_id != 0x44 and chip_id != 0x4d:
+        serial.write_line("TCS unexpected ID CH" + str(channel) + " ID " + str(chip_id))
         return False
     write_register(0x01, 0xeb)  # สะสมแสงประมาณ 50 มิลลิวินาที
     write_register(0x0f, 1)  # ขยายสัญญาณ 4 เท่า
