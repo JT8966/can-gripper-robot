@@ -1,6 +1,6 @@
 {
     "name": "finish-only",
-    "description": "Timed four-motor route from START to FINISH",
+    "description": "Timed four-motor route through both checkpoints to FINISH",
     "dependencies": {
         "core": "*",
         "pxt-motionbit": "github:CytronTechnologies/pxt-motionbit#v1.2.0"
