@@ -26,6 +26,8 @@ MUX_ADDRESS = 0x70  # PCA9548A เมื่อ A0/A1/A2 เป็น LOW
 RIGHT_CHANNEL = 0  # SD0/SC0 หัวอ่านที่ก้ามขวา S3
 LEFT_CHANNEL = 1  # SD1/SC1 หัวอ่านที่ก้ามซ้าย S2
 COLOR_ADDRESS = 0x29  # TCS34725 ทั้งสองตัวใช้ที่อยู่เดียวกัน คนละช่อง
+COLOR_LOCK_READS = 5
+COLOR_LOCK_GAP_MS = 65
 busy = False  # เริ่มด้วย False เพื่อให้ปุ่ม A ใช้ได้เสมอ แม้โปรแกรมตายช่วงบูตก่อนถึงท้ายไฟล์
 stopped = False
 right_can_color = 0  # อ่านกระป๋องในวงขวา S3
@@ -611,18 +613,25 @@ def pick_cans(at_dock: bool = False):
         return False
     right = read_color(RIGHT_CHANNEL)
     left = read_color(LEFT_CHANNEL)
-    serial.write_line("R " + color_name(right) + " / L " + color_name(left))
-    basic.pause(65)
+    if place_raise_ms(right) == 0 or place_raise_ms(left) == 0:
+        color_sensor_ready = False
+        return False
+    for i in range(1, COLOR_LOCK_READS):
+        basic.pause(COLOR_LOCK_GAP_MS)
+        if stopped or nb142_mask() != 31:
+            return False
+        if read_color(RIGHT_CHANNEL) != right or read_color(LEFT_CHANNEL) != left:
+            color_sensor_ready = False
+            serial.write_line("COLOR UNSTABLE")
+            return False
     if stopped or nb142_mask() != 31:
-        return False
-    if place_raise_ms(right) == 0 or place_raise_ms(left) == 0 or read_color(RIGHT_CHANNEL) != right or read_color(LEFT_CHANNEL) != left:
-        color_sensor_ready = False  # รอบถัดไปตั้งค่าหัวอ่านใหม่ได้หากไฟหรือสายหลุด
-        return False
-    if stopped:
         return False
     arm_cycle_incomplete = True
     right_can_color = right
     left_can_color = left
+    serial.write_line("COLOR LOCK R " + color_name(right) + " / L " + color_name(left))
+    if stopped:
+        return False
     set_grip(GRIP_LEFT_CLOSED, GRIP_RIGHT_CLOSED)
     basic.pause(550)
     move_rack(RACK_UP_COMMAND, RACK_UP_MS)

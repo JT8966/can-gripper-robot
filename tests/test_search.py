@@ -258,6 +258,65 @@ class SearchTest(unittest.TestCase):
                 self.assertEqual(robot.env["right_can_color"], 0)
                 self.assertEqual(robot.servos, [(2, 40), (3, 40)])
 
+    def test_color_lock_requires_five_reads_and_survives_sensor_changes(self):
+        robot = Robot()
+        robot.env.update(color_sensor_ready=True, find_cans=lambda at_dock=False: True)
+        reads = []
+        def read_color(channel):
+            reads.append(channel)
+            self.assertEqual(robot.wheels, [(0, 0)] * 4)
+            self.assertEqual(robot.servos, [(2, 40), (3, 40)])
+            return 1 if channel == 0 else 3
+        robot.env["read_color"] = read_color
+        self.assertTrue(robot.env["pick_cans"]())
+        self.assertEqual(reads, [0, 1] * 5)
+        self.assertEqual((robot.env["right_can_color"], robot.env["left_can_color"]), (1, 3))
+        robot.env["read_color"] = lambda channel: self.fail("reread a locked color")
+        self.assertFalse(robot.env["pick_cans"]())
+        self.assertTrue(robot.env["place_cans"](1))
+        self.assertEqual((robot.env["right_can_color"], robot.env["left_can_color"]), (0, 3))
+        self.assertTrue(robot.env["place_cans"](3))
+        self.assertEqual((robot.env["right_can_color"], robot.env["left_can_color"]), (0, 0))
+        robot.samples = [(150, 80, 72, 18), (150, 95, 30, 25)]
+        robot.env["read_color"] = robot.classify
+        self.assertTrue(robot.env["pick_cans"]())
+        self.assertEqual((robot.env["right_can_color"], robot.env["left_can_color"]), (4, 1))
+
+    def test_color_lock_rejects_late_changes_on_either_side(self):
+        for channel in (0, 1):
+            robot = Robot()
+            robot.env.update(color_sensor_ready=True, find_cans=lambda at_dock=False: True)
+            reads = [0, 0]
+            def read_color(side):
+                reads[side] += 1
+                return 4 if side == channel and reads[side] == 5 else 1
+            robot.env["read_color"] = read_color
+            self.assertFalse(robot.env["pick_cans"]())
+            self.assertFalse(robot.env["color_sensor_ready"])
+            self.assertEqual((robot.env["right_can_color"], robot.env["left_can_color"]), (0, 0))
+            self.assertEqual(robot.servos, [(2, 40), (3, 40)])
+            self.assertEqual(robot.wheels, [(0, 0)] * 4)
+
+    def test_color_lock_aborts_on_stop_or_boundary_loss(self):
+        for action in ("stop", "boundary"):
+            robot = Robot()
+            robot.env.update(color_sensor_ready=True, find_cans=lambda at_dock=False: True)
+            pauses = 0
+            def tick(delay):
+                nonlocal pauses
+                pauses += 1
+                if pauses == 4:
+                    if action == "stop":
+                        robot.buttons["B"]()
+                    else:
+                        robot.mask = 0
+            robot.tick = tick
+            self.assertFalse(robot.env["pick_cans"]())
+            self.assertEqual((robot.env["right_can_color"], robot.env["left_can_color"]), (0, 0))
+            self.assertNotIn((2, 10), robot.servos)
+            self.assertNotIn((3, 10), robot.servos)
+            self.assertEqual(robot.wheels, [(0, 0)] * 4)
+
     def test_cancel_while_reversing(self):
         robot = Robot()
         robot.mask = 0
