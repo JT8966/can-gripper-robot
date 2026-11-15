@@ -1,0 +1,10 @@
+{
+    "name": "single-can",
+    "description": "Pick one can with the right gripper and deliver to its color station",
+    "dependencies": {
+        "core": "*",
+        "pxt-motionbit": "github:CytronTechnologies/pxt-motionbit#v1.2.0"
+    },
+    "files": ["main.py"],
+    "preferredEditor": "pyprj"
+}

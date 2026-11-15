@@ -8,7 +8,7 @@ SOURCE = Path(__file__).resolve().parents[1] / "main.py"
 
 
 class Robot:
-    def __init__(self, sensor_present=True):
+    def __init__(self, sensor_present=True, source=SOURCE):
         self.ms = 0
         self.heading = 350
         self.mask = 31
@@ -47,7 +47,7 @@ class Robot:
                      show_leds=lambda pattern, interval: setattr(self, "display", pattern)),
             control=NS(wait_micros=lambda delay: None), serial=NS(write_line=lambda text: None),
         )
-        exec(compile(SOURCE.read_text(encoding="utf-8"), str(SOURCE), "exec"), self.env)
+        exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), self.env)
         self.classify = self.env["read_color"]
 
     def write_i2c(self, addr, value, fmt, repeated=False):
