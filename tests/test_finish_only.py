@@ -43,9 +43,9 @@ class FinishRouteTest(unittest.TestCase):
         self.assertEqual(wheels, [0] * 4)
         return api, moves
 
-    def test_follows_example_map_to_finish(self):
+    def test_follows_actual_field_to_finish(self):
         api, moves = self.simulate()
-        heading, col, row = 0, 1, 4
+        heading, col, row = 1, 3, 4
         corners = []
         for wheels, duration in moves:
             if wheels == (1, 1, 1, 1):
@@ -61,10 +61,10 @@ class FinishRouteTest(unittest.TestCase):
                 self.assertEqual(wheels, (-1, -1, 1, 1))
                 heading = (heading - 1) % 4
                 self.assertEqual(duration, api["LEFT_90_MS"])
-        self.assertEqual(corners, [(1, 1), (3, 1), (3, 2), (2, 2), (2, 3), (7, 3), (7, 4)])
+        self.assertEqual(corners, [(6, 4), (6, 1), (5, 1), (5, 2)])
 
     def test_stop_during_forward_or_pivot(self):
-        for step in (1, 2, 13):
+        for step in (1, 2, 7):
             with self.subTest(step=step):
                 _, moves = self.simulate(stop_at=step)
                 self.assertEqual(len(moves), step)

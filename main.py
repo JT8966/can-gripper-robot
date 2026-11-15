@@ -22,10 +22,14 @@ NB142_DETECTED_LEVEL = 1  # ระดับสัญญาณเมื่อ NB1
 NB142_PINS = [DigitalPin.P12, DigitalPin.P13, DigitalPin.P14, DigitalPin.P15, DigitalPin.P16]  # พินของหัวอ่าน NB142 เรียงซ้ายไปขวาตามทิศเดินหน้าของรถ
 TURN_DEG = 90  # มุมหมุนขวาเมื่อ NB142 หลุดกรอบ
 TURN_TOLERANCE_DEG = 4  # เผื่อมุมรถไหล 4° สั่งเบรกที่ 86° สำหรับเป้าหมาย 90° เพิ่มค่านี้เพื่อเบรกเร็วขึ้น
-COLOR_ADDRESS = 0x29  # TCS34725 เซ็นเซอร์สีข้างขวา (ต่อตรง I2C ไม่ผ่าน PCA9548A)
+MUX_ADDRESS = 0x70  # PCA9548A เมื่อ A0/A1/A2 เป็น LOW
+RIGHT_CHANNEL = 0  # SD0/SC0 หัวอ่านที่ก้ามขวา S3
+LEFT_CHANNEL = 1  # SD1/SC1 หัวอ่านที่ก้ามซ้าย S2
+COLOR_ADDRESS = 0x29  # TCS34725 ทั้งสองตัวใช้ที่อยู่เดียวกัน คนละช่อง
 busy = False  # เริ่มด้วย False เพื่อให้ปุ่ม A ใช้ได้เสมอ แม้โปรแกรมตายช่วงบูตก่อนถึงท้ายไฟล์
 stopped = False
 right_can_color = 0  # อ่านกระป๋องในวงขวา S3
+left_can_color = 0   # อ่านกระป๋องในวงซ้าย S2
 arm_cycle_incomplete = False  # ถ้าหยุดกลางลำดับแขน ต้องจัดกลไกกลับท่าเริ่มแล้วรีเซ็ต
 color_sensor_ready = False
 
@@ -42,6 +46,12 @@ def on_button_pressed_b():
 input.on_button_pressed(Button.B, on_button_pressed_b)
 
 
+def select_color_channel(channel: number):
+    mask = 1 << channel  # เปิดทีละช่อง เพื่อให้มี TCS34725 ตอบเพียงตัวเดียว
+    pins.i2c_write_number(MUX_ADDRESS, mask, NumberFormat.UINT8_LE, False)
+    return pins.i2c_read_number(MUX_ADDRESS, NumberFormat.UINT8_LE) == mask
+
+
 def write_register(reg: number, value: number):
     data = bytearray(2)
     data[0] = 0x80 | reg
@@ -49,11 +59,14 @@ def write_register(reg: number, value: number):
     pins.i2c_write_buffer(COLOR_ADDRESS, data)
 
 
-def sensor_ready():
+def sensor_ready(channel: number):
+    if not select_color_channel(channel):
+        serial.write_line("MUX FAIL CH" + str(channel))
+        return False
     pins.i2c_write_number(COLOR_ADDRESS, 0x92, NumberFormat.UINT8_LE, True)
     chip_id = pins.i2c_read_number(COLOR_ADDRESS, NumberFormat.UINT8_LE)
     if chip_id != 0x44 and chip_id != 0x4d:
-        serial.write_line("TCS unexpected ID " + str(chip_id))
+        serial.write_line("TCS FAIL CH" + str(channel) + " ID " + str(chip_id))
         return False
     write_register(0x01, 0xeb)  # สะสมแสงประมาณ 50 มิลลิวินาที
     write_register(0x0f, 1)  # ขยายสัญญาณ 4 เท่า
@@ -64,10 +77,10 @@ def sensor_ready():
     return True
 
 
-def check_color_sensor():
-    ready = sensor_ready()
-    serial.write_line("TCS " + ("OK" if ready else "ERROR"))
-    return ready
+def check_color_sensors():
+    right_ready = sensor_ready(RIGHT_CHANNEL)
+    left_ready = sensor_ready(LEFT_CHANNEL)
+    return right_ready and left_ready
 
 
 RED = 1
@@ -76,7 +89,9 @@ GREEN = 3
 YELLOW = 4
 
 
-def read_color():
+def read_color(channel: number):
+    if not select_color_channel(channel):
+        return 0
     pins.i2c_write_number(COLOR_ADDRESS, 0xb4, NumberFormat.UINT8_LE, True)
     data = pins.i2c_read_buffer(COLOR_ADDRESS, 8)
     clear = data.get_number(NumberFormat.UINT16_LE, 0)
@@ -114,34 +129,16 @@ MATCH_MS = 180000  # เวลาแข่งขันต่อรอบ
 MATCH_MARGIN_MS = 45000  # กันเวลาไว้สำหรับทริปสุดท้ายและเดินกลับ FINISH
 CANS_TOTAL = 6
 RELEASE_MS = 400
-# ชุดคำสั่งเส้นทาง ("F", ms) เดินหน้า ("B", ms) ถอย ("L", deg) หมุนซ้าย ("R", deg) หมุนขวา
-# ต้องวัด ms/องศาบนสนามจริงก่อนแข่ง ปล่อยว่างไว้ = หุ่นหยุดและขึ้น ✗ แทนที่จะวิ่งเดา
-def green_deliver_route():
-    return []
-
-
-def yellow_deliver_route():
-    return []
-
-
-def red_deliver_route():
-    return []
-
-
-def green_return_route():
-    return []
-
-
-def yellow_return_route():
-    return []
-
-
-def red_return_route():
-    return []
-
-
-def finish_route():
-    return []
+# ผังรูปจริง คอลัมน์ 1–8 จากซ้าย แถว 1–4 จากบน หนึ่งตัวอักษร = หนึ่งช่อง
+FIELD_TILE_MS = 500  # เวลาเดิน 30 ซม. ที่กำลังล้อจริง ต้องจูนรวมช่วงลูกระนาดและสะพาน
+DROP_APPROACH_MS = 400  # จากกลางช่องหน้าแท่นถึงตำแหน่งปล่อย ต้องวัดกับระยะยื่นของก้าม
+START_PATH = "EEEN"  # (3,4) หันขวา ไปจุดร่วม (6,3)
+# จากจุดร่วมไปหยุดก่อนจุดรับหนึ่งช่อง เรียงขวา กลาง ซ้าย
+PICKUP_PATHS = ["NE", "NNWW", "WWWWNENWWSS"]
+PICKUP_FACES = "ESS"  # หันเข้าหาหลุมดำแต่ละคู่
+FINISH_PATH = "SENWNENSWNWS"  # ผ่าน (7,4) และ (7,1) แล้วเข้า FINISH (5,2) จากเหนือ
+field_north = 0  # ทิศขึ้นในภาพ คำนวณจากเข็มทิศเมื่อกด A โดยรถหันขวา
+dock_travel_ms = 0  # เวลาที่ล้อเดินจริงเมื่อเข้ารับ ใช้ถอยกลับจุดเดิม
 
 
 # ระยะยก S1 ตามความสูงแท่น 50/100/150 มม. ต้องจูนหน้างาน
@@ -155,24 +152,12 @@ def place_raise_ms(color: number):
     return 0
 
 
-def deliver_route(color: number):
+def station_path(color: number):
     if color == GREEN:
-        return green_deliver_route()
+        return "WWWW"  # (2,3) หันลงหาแท่นเขียว (2,4)
     if color == YELLOW:
-        return yellow_deliver_route()
-    if color == RED:
-        return red_deliver_route()
-    return []
-
-
-def return_route(color: number):
-    if color == GREEN:
-        return green_return_route()
-    if color == YELLOW:
-        return yellow_return_route()
-    if color == RED:
-        return red_return_route()
-    return []
+        return "NEN"  # (7,1) หันขวาหาแท่นเหลือง (8,1)
+    return "EE"  # (8,3) หันลงหาแท่นแดง (8,4)
 
 
 def drive_sides(left: MotionBitMotorDirection, right: MotionBitMotorDirection, trim: number = 0):  # ขับล้อแยกทิศซ้าย–ขวา โดย trim คือกำลังที่ผ่อนด้านหนึ่ง
@@ -230,8 +215,10 @@ def object_in_reach():
     return echo_us > 0 and echo_us <= PICKUP_DISTANCE_CM * 58
 
 
-# หยุดรอวัดระยะซ้ำก่อนอ่านสีจากกระป๋องข้างขวา
-def find_cans():
+# หยุดรอวัดระยะซ้ำก่อนอ่านสีกระป๋องทั้งสองข้าง
+def find_cans(at_dock: bool = False):
+    global dock_travel_ms
+    dock_travel_ms = 0
     start_time = input.running_time()
     target = input.compass_heading()
     if target < 0 or target >= 360:
@@ -251,6 +238,7 @@ def find_cans():
     wheels_moving = False
     aligning = False
     direction = 1
+    last_drive = start_time
     while not stopped:
         if input.running_time() - start_time > 30000:
             stop_wheels()
@@ -265,6 +253,15 @@ def find_cans():
             mask = nb142_mask()
         if stopped:
             return 0
+        if at_dock:
+            now = input.running_time()
+            if wheels_moving:
+                dock_travel_ms += now - last_drive
+            last_drive = now
+            # ที่ช่องหน้าจุดรับ การเลี้ยวหลบทำให้ถอยกลับจุดเดิมไม่ได้
+            if mask != 31 or dock_travel_ms > FIELD_TILE_MS:
+                stop_wheels()
+                return 0
         # ดับ 1–4 ช่อง ให้หยุดเดินหน้าหรือเลิกเลี้ยว 90° แล้วหมุนกลับเข้าหาฝั่งที่ยังติด จำกัดเวลาแก้แนว 5 วินาที
         if mask != 0 and mask != 31:
             if not aligning:
@@ -353,70 +350,66 @@ def find_cans():
     return 0
 
 
-# เดินตรงตามเวลาที่จูนไว้โดยใช้เข็มทิศคุมแนว เหมือนช่วงเดินตรงใน find_cans
-def drive_straight(milliseconds: number):
-    if stopped or milliseconds <= 0:
-        return
+# เดินตรง/ถอยตามเวลาที่จูนไว้ เบรกและแจ้งล้มเหลวเมื่อหลุดแนวของช่อง
+def drive_straight(milliseconds: number, reverse: bool = False):
     target = input.compass_heading()
-    if target < 0 or target >= 360:
-        return
+    if stopped or target < 0 or target >= 360:
+        return False
     deadline = input.running_time() + milliseconds
     trim = 0
     while not stopped and input.running_time() < deadline:
         heading = input.compass_heading()
-        if heading < 0 or heading >= 360:
-            break
+        if heading < 0 or heading >= 360 or nb142_mask() != 31:
+            stop_wheels()
+            return False
         error = heading_error(target, heading)
         amount = min(80, 3 * max(0, abs(error) - 2))
         desired = amount if error > 0 else -amount
         trim += max(-16, min(16, desired - trim))
-        drive_sides(LEFT, RIGHT, trim)
-        basic.pause(65)
+        if reverse:
+            drive_sides(opposite(LEFT), opposite(RIGHT), -trim)
+        else:
+            drive_sides(LEFT, RIGHT, trim)
+        basic.pause(min(30, max(1, deadline - input.running_time())))
     stop_wheels()
+    return not stopped
 
 
 # หมุนอยู่กับที่ตามองศา ใช้เพดาน 5 วินาทีเหมือนการหมุน 90° ใน find_cans
-def turn_in_place(degrees: number):
-    if stopped or degrees == 0:
-        return
-    start = input.compass_heading()
-    if start < 0 or start >= 360:
-        return
-    target = (start + degrees) % 360
+def face_field(direction: number):
+    target = (field_north + 90 * direction) % 360
     deadline = input.running_time() + 5000
     while not stopped and input.running_time() < deadline:
         heading = input.compass_heading()
-        if heading < 0 or heading >= 360:
+        if heading < 0 or heading >= 360 or nb142_mask() != 31:
             break
         error = heading_error(target, heading)
         if abs(error) <= TURN_TOLERANCE_DEG:
-            break
+            stop_wheels()
+            return True
         if error > 0:
             drive_sides(LEFT, opposite(RIGHT))
         else:
             drive_sides(opposite(LEFT), RIGHT)
         basic.pause(10)
     stop_wheels()
+    return False
 
 
-def run_steps(steps):
-    for step in steps:
-        if stopped:
+def walk_path(path: str, returning: bool = False):
+    i = 0
+    while i < len(path):
+        index = len(path) - 1 - i if returning else i
+        letter = path[index]
+        direction = "NESW".index(letter)
+        if returning:
+            direction = (direction + 2) % 4
+        tiles = 1
+        while i + tiles < len(path) and path[index - tiles if returning else index + tiles] == letter:
+            tiles += 1
+        if not face_field(direction) or not drive_straight(tiles * FIELD_TILE_MS):
             return False
-        action = step[0]
-        value = step[1]
-        if action == "F":
-            drive_straight(value)
-        elif action == "B":
-            drive_sides(opposite(LEFT), opposite(RIGHT))
-            basic.pause(value)
-            stop_wheels()
-        elif action == "R":
-            turn_in_place(value)
-        elif action == "L":
-            turn_in_place(-value)
-        else:
-            return False
+        i += tiles
     return not stopped
 
 
@@ -461,54 +454,62 @@ def set_grip(left: number, right: number):
 
 
 # ยกให้พ้นขอบแท่นตามสี เปิดวงคีบปล่อยกระป๋องลงหลุม แล้วลดรางกลับ
-def place_can(color: number):
+def place_cans(color: number):
+    global right_can_color, left_can_color
     global arm_cycle_incomplete
     raise_ms = place_raise_ms(color)
-    if stopped or raise_ms <= 0:
+    if stopped or raise_ms <= 0 or (right_can_color != color and left_can_color != color):
         return False
     arm_cycle_incomplete = True
-    motionbit.set_servo_position(MotionBitServoChannel.S1, RACK_UP_COMMAND)
-    basic.pause(raise_ms)
+    move_rack(RACK_UP_COMMAND, raise_ms)
     if stopped:
         return False
-    set_grip(GRIP_LEFT_OPEN, GRIP_RIGHT_OPEN)
+    if right_can_color == color:
+        motionbit.set_servo_position(MotionBitServoChannel.S3, GRIP_RIGHT_OPEN)
+        right_can_color = 0
+    if left_can_color == color:
+        motionbit.set_servo_position(MotionBitServoChannel.S2, GRIP_LEFT_OPEN)
+        left_can_color = 0
     basic.pause(RELEASE_MS)
-    motionbit.set_servo_position(MotionBitServoChannel.S1, RACK_DOWN_COMMAND)
-    basic.pause(raise_ms)
-    motionbit.set_servo_position(MotionBitServoChannel.S1, 90)
+    move_rack(RACK_DOWN_COMMAND, raise_ms)  # กลับระดับขน เพื่อถือใบที่เหลือไปแท่นถัดไป
+    if not right_can_color and not left_can_color:
+        move_rack(RACK_DOWN_COMMAND, RACK_DOWN_MS)  # กลับระดับรับเมื่อปล่อยหมดทั้งคู่
     if stopped:
         return False
     arm_cycle_incomplete = False
     return True
 
 
-def pick_cans():
-    global right_can_color, arm_cycle_incomplete, color_sensor_ready
-    if arm_cycle_incomplete:
+def pick_cans(at_dock: bool = False):
+    global right_can_color, left_can_color, arm_cycle_incomplete, color_sensor_ready
+    if arm_cycle_incomplete or right_can_color or left_can_color:
         return False  # กลไกค้างกลางลำดับ ต้อง RESET ก่อน
-    found = find_cans()
+    found = find_cans(at_dock)
     stop_wheels()
     if not found or stopped:
         return False
     # ใช้สีเฉพาะตอนรับกระป๋อง ถ้าตอนเปิดเครื่องยังไม่พบหัวอ่าน ให้ลองอีกครั้งขณะล้อหยุด
     if not color_sensor_ready:
         try:
-            color_sensor_ready = check_color_sensor()
+            color_sensor_ready = check_color_sensors()
         except:
             color_sensor_ready = False
     if not color_sensor_ready or stopped or nb142_mask() != 31:
         return False
-    right = read_color()
-    serial.write_line("S3 " + color_name(right))
+    right = read_color(RIGHT_CHANNEL)
+    left = read_color(LEFT_CHANNEL)
+    serial.write_line("R " + color_name(right) + " / L " + color_name(left))
     basic.pause(65)
     if stopped or nb142_mask() != 31:
         return False
-    if right <= 0 or read_color() != right:
+    if place_raise_ms(right) == 0 or place_raise_ms(left) == 0 or read_color(RIGHT_CHANNEL) != right or read_color(LEFT_CHANNEL) != left:
+        color_sensor_ready = False  # รอบถัดไปตั้งค่าหัวอ่านใหม่ได้หากไฟหรือสายหลุด
         return False
     if stopped:
         return False
     arm_cycle_incomplete = True
     right_can_color = right
+    left_can_color = left
     set_grip(GRIP_LEFT_CLOSED, GRIP_RIGHT_CLOSED)
     basic.pause(550)
     move_rack(RACK_UP_COMMAND, RACK_UP_MS)
@@ -518,44 +519,40 @@ def pick_cans():
     return True
 
 
-# หนึ่งทริป: ค้นหาและคีบกระป๋อง แล้ววิ่งไปแท่นสีที่ตรงกันและปล่อยลงหลุม
-def deliver_trip():
-    global right_can_color
-    right_can_color = 0  # อ่านสีใหม่ทุกทริป เพราะกระป๋องแต่ละใบสีไม่เหมือนกัน
-    if not pick_cans():
-        return False
-    color = right_can_color
-    route = deliver_route(color)
-    if not route:
-        return False  # เส้นทางของสีนี้ยังไม่ถูกจูน
-    if not run_steps(route):
-        return False
-    return place_can(color)
-
-
 # ภารกิจเต็ม: รับ–ส่ง 6 ชิ้น แล้วผ่าน Check Point กลับ FINISH ภายในเวลาแข่ง
 def run_match():
-    if arm_cycle_incomplete or stopped:
+    global field_north
+    if arm_cycle_incomplete or right_can_color or left_can_color or stopped:
         return False
     start = input.running_time()
-    placed = 0
-    while placed < CANS_TOTAL and not stopped:
-        if input.running_time() - start >= MATCH_MS - MATCH_MARGIN_MS:
-            break
-        if not deliver_trip():
-            return False
-        color = right_can_color
-        placed += 1
-        serial.write_line("PLACED " + str(placed) + " " + color_name(color))
-        if placed >= CANS_TOTAL:
-            break
-        route = return_route(color)
-        if not route or not run_steps(route):
-            return False  # ต้องมีเส้นทางกลับจุดรับ ไม่งั้นทริปถัดไปจะออกจากที่ผิด
-    finish = finish_route()
-    if placed < CANS_TOTAL or stopped or not finish:
+    heading = input.compass_heading()
+    if heading < 0 or heading >= 360 or stopped:
         return False
-    return run_steps(finish)
+    field_north = (heading + 270) % 360  # START หันขวาในภาพ
+    if not walk_path(START_PATH):
+        return False
+    placed = 0
+    for i in range(len(PICKUP_PATHS)):
+        if input.running_time() - start >= MATCH_MS - MATCH_MARGIN_MS:
+            return False
+        path = PICKUP_PATHS[i]
+        if not walk_path(path) or not face_field("NESW".index(PICKUP_FACES[i])) or not pick_cans(True):
+            return False
+        if not drive_straight(dock_travel_ms, True) or not walk_path(path, True):
+            return False
+        while right_can_color or left_can_color:
+            color = right_can_color if right_can_color else left_can_color
+            count = 2 if right_can_color == left_can_color else 1
+            path = station_path(color)
+            if not walk_path(path) or not face_field(1 if color == YELLOW else 2):
+                return False
+            if not drive_straight(DROP_APPROACH_MS) or not place_cans(color):
+                return False
+            placed += count
+            serial.write_line("PLACED " + str(placed) + " " + color_name(color))
+            if not drive_straight(DROP_APPROACH_MS, True) or not walk_path(path, True):
+                return False
+    return placed == CANS_TOTAL and walk_path(FINISH_PATH)
 
 
 # กด A เพื่อเริ่มหนึ่งรอบ ตัวแปร busy กันการกดซ้ำ จอ ✓ เมื่อจบลำดับ หรือ ✗ เมื่อหยุดก่อนจบ

@@ -1,4 +1,4 @@
-# แผนสำรองสำหรับสนามตัวอย่างหน้า 1 ตั้งรถกลาง START หันขึ้นตามภาพ
+# สนามจริงตามภาพมุมบน ตั้งรถกลาง START หันขวา (คอลัมน์ 3 แถว 4)
 LEFT_FORWARD_SPEED = 255  # เดินตรง ล้อซ้าย M1/M2 (0–255)
 RIGHT_FORWARD_SPEED = 240  # เดินตรง ล้อขวา M3/M4 ลดลงทีละ 5 ถ้ารถยังเบนซ้าย
 TURN_SPEED = 255  # หมุนอยู่กับที่ ใช้กำลังนี้ทั้งสองฝั่ง
@@ -10,8 +10,7 @@ BRAKE_MS = 120  # เวลารอให้รถหยุดไหลก่�
 # จำนวนบวกคือจำนวนช่องที่เดินตรง ระหว่างตัวเลขให้ใส่คำสั่งหมุนด้านที่ต้องการ
 TURN_RIGHT = -1
 TURN_LEFT = -2
-ROUTE = [3, TURN_RIGHT, 2, TURN_RIGHT, 1, TURN_RIGHT, 1,
-         TURN_LEFT, 1, TURN_LEFT, 5, TURN_RIGHT, 1]
+ROUTE = [3, TURN_LEFT, 3, TURN_LEFT, 1, TURN_LEFT, 1]
 
 running = False
 stopped = False
