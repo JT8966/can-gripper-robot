@@ -80,6 +80,7 @@ def sensor_ready(channel: number):
 def check_color_sensors():
     right_ready = sensor_ready(RIGHT_CHANNEL)
     left_ready = sensor_ready(LEFT_CHANNEL)
+    serial.write_line("MODEL " + ("TRAINED" if MODEL_READY else "THRESHOLD"))
     return right_ready and left_ready
 
 
@@ -89,17 +90,38 @@ GREEN = 3
 YELLOW = 4
 
 
+# ----- BEGIN COLOR MODEL (สร้างด้วย tools/train_color.py) -----
+# MODEL_READY = False ใช้เกณฑ์ใน read_color() ก่อน ถ้าเทรนจากกระป๋องจริงแล้ว
+# ให้รัน python tools/train_color.py <ไฟล์ข้อมูล> --apply main.py เพื่อแทนช่วงนี้
+MODEL_READY = False
+
+
+def model_color(channel: number, clear: number, red: number, green: number, blue: number):
+    return 0  # โมเดลว่าง: ยังไม่ใช้ จนกว่าจะแทนด้วยกฎที่เทรนแล้ว
+# ----- END COLOR MODEL -----
+
+
+def read_raw():
+    pins.i2c_write_number(COLOR_ADDRESS, 0xb4, NumberFormat.UINT8_LE, True)
+    data = pins.i2c_read_buffer(COLOR_ADDRESS, 8)
+    return [data.get_number(NumberFormat.UINT16_LE, 0),
+            data.get_number(NumberFormat.UINT16_LE, 2),
+            data.get_number(NumberFormat.UINT16_LE, 4),
+            data.get_number(NumberFormat.UINT16_LE, 6)]
+
+
 def read_color(channel: number):
     if not select_color_channel(channel):
         return 0
-    pins.i2c_write_number(COLOR_ADDRESS, 0xb4, NumberFormat.UINT8_LE, True)
-    data = pins.i2c_read_buffer(COLOR_ADDRESS, 8)
-    clear = data.get_number(NumberFormat.UINT16_LE, 0)
-    red = data.get_number(NumberFormat.UINT16_LE, 2)
-    green = data.get_number(NumberFormat.UINT16_LE, 4)
-    blue = data.get_number(NumberFormat.UINT16_LE, 6)
+    raw = read_raw()
+    clear = raw[0]
+    red = raw[1]
+    green = raw[2]
+    blue = raw[3]
     if clear < 30:
         return -1  # มืดเกินไป ยังใช้ยืนยันการพ้นแถบต้นทางไม่ได้
+    if MODEL_READY:
+        return model_color(channel, clear, red, green, blue)
     # เหลืองมีทั้งแดงและเขียวสูงกว่าน้ำเงิน เกณฑ์เหล่านี้ต้องลองกับเทปและแสงจริง
     if min(red, green) > blue * 1.45 and max(red, green) <= min(red, green) * 1.35:
         return YELLOW
@@ -122,6 +144,97 @@ def color_name(color: number):
     if color == YELLOW:
         return "YELLOW"
     return "?"
+
+
+# ----- โหมดเก็บตัวอย่างสีสำหรับเทรนโมเดล (ไม่ใช้ตอนแข่ง) -----
+SAMPLE_READS = 5
+SAMPLE_GAP_MS = 80
+SAMPLE_CHANNELS = [RIGHT_CHANNEL, LEFT_CHANNEL]
+
+
+def sample_label_name(label: number):
+    if label == 0:
+        return "NONE"
+    return color_name(label)
+
+
+def next_sample_label(label: number):
+    if label == RED:
+        return BLUE
+    if label == BLUE:
+        return GREEN
+    if label == GREEN:
+        return YELLOW
+    if label == YELLOW:
+        return 0
+    return RED
+
+
+# พิมพ์ค่าดิบของทั้งสองหัวเป็น CSV ให้ tools/train_color.py อ่าน
+# รูปแบบ SAMPLE,<RIGHT|LEFT>,<สี>,clear,red,green,blue
+def log_color_samples(label: number):
+    if not color_sensor_ready:
+        return 0
+    written = 0
+    for i in range(SAMPLE_READS):
+        for k in range(len(SAMPLE_CHANNELS)):
+            channel = SAMPLE_CHANNELS[k]
+            if select_color_channel(channel):
+                raw = read_raw()
+                side = "RIGHT" if channel == RIGHT_CHANNEL else "LEFT"
+                serial.write_line("SAMPLE," + side + "," + sample_label_name(label) + "," + str(raw[0]) + "," + str(raw[1]) + "," + str(raw[2]) + "," + str(raw[3]))
+                written += 1
+        basic.pause(SAMPLE_GAP_MS)
+    return written
+
+
+# เปิดเครื่องโดยกด A+B ค้าง: A เปลี่ยนป้ายสี B สั้นเก็บตัวอย่าง B ค้างหุบ/กางคีบ A+B ค้างอีกครั้งเพื่อออก
+# วางกระป๋องสีเดียวกันให้ตรงตำแหน่งคีบทั้งสองข้าง แล้วหุบคีบก่อนเก็บ และเก็บป้าย NONE ตอนคีบว่าง
+def run_color_sampler():
+    global color_sensor_ready
+    try:
+        color_sensor_ready = check_color_sensors()
+    except:
+        color_sensor_ready = False
+    if not color_sensor_ready:
+        basic.show_icon(IconNames.NO)
+        basic.pause(800)
+        return
+    label = RED
+    grip_closed = False
+    basic.show_string(sample_label_name(label))
+    while True:
+        if input.button_is_pressed(Button.A) and input.button_is_pressed(Button.B):
+            basic.pause(400)
+            if input.button_is_pressed(Button.A) and input.button_is_pressed(Button.B):
+                break
+        elif input.button_is_pressed(Button.A):
+            label = next_sample_label(label)
+            basic.show_string(sample_label_name(label))
+            while input.button_is_pressed(Button.A):
+                basic.pause(20)
+        elif input.button_is_pressed(Button.B):
+            held = 0
+            while input.button_is_pressed(Button.B):
+                basic.pause(20)
+                held += 20
+            if held >= 1000:
+                grip_closed = not grip_closed
+                if grip_closed:
+                    set_grip(GRIP_LEFT_CLOSED, GRIP_RIGHT_CLOSED)
+                else:
+                    set_grip(GRIP_LEFT_OPEN, GRIP_RIGHT_OPEN)
+            else:
+                if log_color_samples(label) > 0:
+                    basic.show_icon(IconNames.YES)
+                else:
+                    basic.show_icon(IconNames.NO)
+                basic.pause(300)
+                basic.show_string(sample_label_name(label))
+        basic.pause(20)
+    # รอให้ปล่อยปุ่มก่อน กันโหมดทดสอบมอเตอร์เริ่มทันทีหลังออกจากโหมดเก็บตัวอย่าง
+    while input.button_is_pressed(Button.A) or input.button_is_pressed(Button.B):
+        basic.pause(20)
 
 
 # ----- ภารกิจแข่งขัน อปท. เดลิเวอรี: 3 นาทีต่อรอบ วัตถุ 3 สี x 2 ชิ้น -----
@@ -580,6 +693,12 @@ basic.show_icon(IconNames.YES, 0)
 stop_wheels()
 set_grip(GRIP_LEFT_OPEN, GRIP_RIGHT_OPEN)
 basic.pause(1000)
+# กด A+B ค้างตอนเปิดเครื่อง: เข้าโหมดเก็บตัวอย่างสี (A+B อีกครั้งเพื่อออก)
+if input.button_is_pressed(Button.A) and input.button_is_pressed(Button.B):
+    run_color_sampler()
+    stop_wheels()
+    set_grip(GRIP_LEFT_OPEN, GRIP_RIGHT_OPEN)
+    basic.show_icon(IconNames.YES, 0)
 if input.button_is_pressed(Button.B):
     stopped = False
     motor_check()
